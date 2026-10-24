@@ -42,6 +42,14 @@ dsh-pet/runtime/electron-helper/shared-core.js
 # ── dsh-pet 桌宠应用打包产物（electron-builder 输出，`node scripts/dist.mjs` 可重生）──
 dsh-pet/dist-app/
 
+# ── 隐私 / 凭证（绝不入仓库）──
+#   .astrbot-key   astrbot-key.py 生成的 API Key 明文
+#   *.config.json  本地桥接配置（可能含 key / umo / QQ 号）
+.astrbot-key
+*.astrbot-key
+qqbridge.config.json
+*.local.json
+
 # ── IDE / 编辑器 ──
 .idea/
 .vscode/
