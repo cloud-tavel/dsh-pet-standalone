@@ -23,8 +23,7 @@ export interface FontPreset {
 export const FONT_PRESETS: FontPreset[] = [
   {
     id: 'candy',
-    stack:
-      '"YouYuan","幼圆","Yuanti SC","Comic Sans MS","PingFang SC","Microsoft YaHei",sans-serif',
+    stack: '"YouYuan","幼圆","Yuanti SC","Comic Sans MS","PingFang SC","Microsoft YaHei",sans-serif',
   },
   { id: 'yahei', stack: '"Microsoft YaHei","PingFang SC",sans-serif' },
   { id: 'youyuan', stack: '"YouYuan","Yuanti SC",sans-serif' },
