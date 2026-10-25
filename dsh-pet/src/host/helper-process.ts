@@ -12,7 +12,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -300,13 +300,100 @@ export async function ensureElectronDownload(options: EnsureElectronOptions = {}
   }
 }
 
-export function defaultLaunch(options: HelperOptions = {}): { command: string; args: string[] } {
+/**
+ * 渲染兼容模式：给 Electron 加 `--no-sandbox` 启动。
+ *
+ * 【为什么需要】部分 Windows 机器上 Electron 的 GPU 进程一启动就 0xC0000005 崩溃，
+ * 且 Chromium 判定「GPU process isn't usable. Goodbye.」直接终止整个浏览器进程 ——
+ * 桌宠窗口根本画不出来，守护循环只能反复重启直到熔断。
+ *
+ * 【实测（Electron 43.3.0 / Windows 11 / 2560×1440）】同一份探针应用：
+ *   - 无开关                → GPU 崩溃，窗口不出现（exit=3）
+ *   - `--disable-gpu`       → **仍然崩溃**，这个开关救不回来
+ *   - `--disable-gpu-sandbox` / `--in-process-gpu` → 不崩但窗口起不来（卡住）
+ *   - `--no-sandbox`        → 窗口正常显示，GPU 不再崩
+ * 即：只有关掉沙箱能绕过，根因在 GPU 进程的沙箱初始化而不是 GPU 本身。
+ *
+ * 【默认策略】auto —— 先用常规参数（沙箱是安全边界，不该默认关掉）；连续崩溃
+ * RENDER_COMPAT_FALLBACK_ATTEMPTS 次后自动切兼容模式重试。显式设置
+ * `DSH_PET_RENDER_COMPAT=1` 可强制开启，`=0` 可彻底关闭（排查问题时用）。
+ */
+export const RENDER_COMPAT_FALLBACK_ATTEMPTS = 2;
+
+export type RenderCompatMode = 'auto' | 'on' | 'off';
+
+/** 解析渲染兼容开关（纯函数，便于单测）。未设置 / 无法识别 → auto。 */
+export function resolveRenderCompatMode(raw: string | undefined = process.env.DSH_PET_RENDER_COMPAT): RenderCompatMode {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (value === '1' || value === 'on' || value === 'true' || value === 'yes') return 'on';
+  if (value === '0' || value === 'off' || value === 'false' || value === 'no') return 'off';
+  return 'auto';
+}
+
+/**
+ * 是否该在本次重启前切到渲染兼容模式（纯函数，auto 策略的核心判定）。
+ *
+ * customLaunch = 调用方给了 command/args（自己接管命令行），此时不得偷偷插参数。
+ */
+export function shouldEnableRenderCompat(input: {
+  mode: RenderCompatMode;
+  active: boolean;
+  failures: number;
+  customLaunch: boolean;
+}): boolean {
+  if (input.active || input.customLaunch) return false;
+  if (input.mode !== 'auto') return false;
+  return input.failures >= RENDER_COMPAT_FALLBACK_ATTEMPTS;
+}
+
+/**
+ * 兼容模式状态文件：记住「这台机器需要 --no-sandbox」。
+ *
+ * 为什么要有它：auto 策略第一次启动必定先崩 RENDER_COMPAT_FALLBACK_ATTEMPTS 次才回退，
+ * 用户看到的是黑屏等待 + 日志里一串 GPU 报错。把这个结论落盘，之后每次直接带参数启动，
+ * 只有换机器（或驱动修好）才需要重新探测。删除该文件即可重置。
+ */
+export function renderCompatStatePath(home = dshHomeDir()): string {
+  return join(home, 'dsh-pet', 'render-compat.json');
+}
+
+export function readRenderCompatState(path = renderCompatStatePath()): boolean {
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as { noSandbox?: unknown } | null;
+    return raw?.noSandbox === true;
+  } catch {
+    // 文件不存在 / 损坏 / 无权限 —— 一律当作"没有记住"，回到常规启动
+    return false;
+  }
+}
+
+export function writeRenderCompatState(path = renderCompatStatePath(), reason = 'gpu-crash'): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({ noSandbox: true, reason, updatedAt: new Date().toISOString() }, null, 2)}\n`,
+    );
+  } catch {
+    // 写不进去只意味着下次还要重新探测，不能因此影响本次启动
+  }
+}
+
+/** 首次拉起用哪种模式：显式开关优先，auto 才看落盘结论（纯函数，便于单测） */
+export function resolveInitialRenderCompat(mode: RenderCompatMode, persisted: boolean): boolean {
+  if (mode === 'on') return true;
+  if (mode === 'off') return false;
+  return persisted;
+}
+
+export function defaultLaunch(options: HelperOptions = {}, renderCompat = false): { command: string; args: string[] } {
   const electronPath = resolveElectronPath([options.electronPath]);
   if (!electronPath) {
     throw new Error('dsh-pet: cannot resolve Electron executable. Set DSH_PET_ELECTRON_PATH or install electron.');
   }
   const helperPath = options.helperPath || defaultHelperMain;
-  return { command: electronPath, args: [helperPath] };
+  // Chromium 开关必须排在 app 路径之前：放后面会被当成 app 的参数吃掉
+  return { command: electronPath, args: [...(renderCompat ? ['--no-sandbox'] : []), helperPath] };
 }
 
 /** 停止 helper 的等待上限（ms）：超过就升级 SIGKILL（issue #64） */
@@ -343,6 +430,8 @@ export class HelperProcess {
   declare private restartFailures: number;
   /** 最近一次 start() 的时间戳（稳定性判定基准） */
   declare private lastStartAt: number;
+  /** 渲染兼容模式是否已生效（见 resolveRenderCompatMode / RENDER_COMPAT_FALLBACK_ATTEMPTS） */
+  declare private renderCompatActive: boolean;
   /** stdout 按行缓冲（协议行按 \n 切分）。用 declare + 构造器赋值，避免类字段降级出外部 helper */
   declare private stdoutBuffer: string;
 
@@ -355,6 +444,7 @@ export class HelperProcess {
     this.restartFailures = 0;
     this.lastStartAt = 0;
     this.stdoutBuffer = '';
+    this.renderCompatActive = resolveInitialRenderCompat(resolveRenderCompatMode(), readRenderCompatState());
   }
 
   start(): import('node:child_process').ChildProcess | undefined {
@@ -363,7 +453,7 @@ export class HelperProcess {
     const helperPath = this.options.helperPath || defaultHelperMain;
     const launch = this.options.command
       ? { command: this.options.command, args: this.options.args || [helperPath] }
-      : defaultLaunch(this.options);
+      : defaultLaunch(this.options, this.renderCompatActive);
     const command = launch.command;
     const args = this.options.args || launch.args;
 
@@ -522,6 +612,32 @@ export class HelperProcess {
     });
   }
 
+  /**
+   * 连续快速崩溃时自动切渲染兼容模式（auto 策略）。只切一次，切完保持。
+   *
+   * 不判退出码：GPU 崩溃（0xC0000005 → code=2147483651）在 Windows 上最常见，
+   * 但把「连续 N 次起不来」当信号更稳——真正常规参数能跑的环境第一次就不会崩，
+   * 而 ENOENT 之类的启动失败切了也没用（会继续崩到熔断），不会造成误伤。
+   */
+  private maybeEnableRenderCompat(): void {
+    if (
+      !shouldEnableRenderCompat({
+        mode: resolveRenderCompatMode(),
+        active: this.renderCompatActive,
+        failures: this.restartFailures,
+        customLaunch: Boolean(this.options.command || this.options.args),
+      })
+    ) {
+      return;
+    }
+    this.renderCompatActive = true;
+    writeRenderCompatState();
+    this.logger.warn?.(
+      `dsh-pet desktop helper 连续崩溃 ${this.restartFailures} 次，切换渲染兼容模式（--no-sandbox）重试；` +
+        `常见原因是 GPU 进程无法在本机沙箱内启动。设为 DSH_PET_RENDER_COMPAT=0 可禁用此回退。`,
+    );
+  }
+
   private scheduleRestart(): void {
     if (this.restartTimer || this.stopping) return;
     // ① 指数退避：750ms 起 2x 封顶 30s；② 熔断：连续崩溃 12 次（约 3 分钟）后停止重启。
@@ -532,6 +648,7 @@ export class HelperProcess {
     } else {
       this.restartFailures += 1;
     }
+    this.maybeEnableRenderCompat();
     if (shouldCircuitBreak(this.restartFailures, this.resolveMaxFailures())) {
       this.logger.error?.(
         `dsh-pet desktop helper crashed ${this.restartFailures} consecutive times; circuit breaker tripped, ` +

@@ -22,13 +22,21 @@ import {
   HelperProcess,
   dshHomeDir,
   defaultElectronExe,
+  defaultLaunch,
   ensureElectronDownload,
   hasGraphicalDisplay,
   helperRunIsStable,
   helperSpawnEnv,
   restartBackoffDelayMs,
   resolveElectronPath,
+  resolveInitialRenderCompat,
+  renderCompatStatePath,
+  readRenderCompatState,
+  writeRenderCompatState,
+  resolveRenderCompatMode,
+  RENDER_COMPAT_FALLBACK_ATTEMPTS,
   shouldCircuitBreak,
+  shouldEnableRenderCompat,
 } from './helper-process.ts';
 
 test('Electron 安装目录无法创建时返回 undefined，不产生未处理拒绝', async (t) => {
@@ -537,4 +545,80 @@ describe('HelperProcess failed spawn recovery', () => {
       },
     );
   }
+});
+
+describe('渲染兼容模式（Windows GPU 进程崩溃的回退）', () => {
+  test('resolveRenderCompatMode 解析环境变量口径', () => {
+    for (const raw of ['1', 'on', 'TRUE', ' yes ']) {
+      assert.equal(resolveRenderCompatMode(raw), 'on', `期望 ${JSON.stringify(raw)} → on`);
+    }
+    for (const raw of ['0', 'off', 'FALSE', ' no ']) {
+      assert.equal(resolveRenderCompatMode(raw), 'off', `期望 ${JSON.stringify(raw)} → off`);
+    }
+    for (const raw of [undefined, '', 'auto', '随意']) {
+      assert.equal(resolveRenderCompatMode(raw), 'auto', `期望 ${JSON.stringify(raw)} → auto`);
+    }
+  });
+
+  test('shouldEnableRenderCompat 只在 auto 且连续崩溃达标时回退', () => {
+    const base = {
+      mode: 'auto' as const,
+      active: false,
+      failures: RENDER_COMPAT_FALLBACK_ATTEMPTS,
+      customLaunch: false,
+    };
+    assert.equal(shouldEnableRenderCompat(base), true);
+    assert.equal(shouldEnableRenderCompat({ ...base, failures: RENDER_COMPAT_FALLBACK_ATTEMPTS - 1 }), false);
+    assert.equal(shouldEnableRenderCompat({ ...base, active: true }), false, '已经开了就不要反复切');
+    assert.equal(shouldEnableRenderCompat({ ...base, mode: 'on' }), false, 'on 在构造期就生效，不需要回退');
+    assert.equal(shouldEnableRenderCompat({ ...base, mode: 'off' }), false, '用户显式关闭必须尊重');
+    assert.equal(shouldEnableRenderCompat({ ...base, customLaunch: true }), false, '调用方接管命令行时不得插参数');
+  });
+
+  test('defaultLaunch 把 --no-sandbox 排在 app 路径之前', (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-pet-launch-'));
+    const exe = join(dir, process.platform === 'win32' ? 'electron.exe' : 'electron');
+    writeFileSync(exe, 'stub');
+    const saved = process.env.DSH_PET_ELECTRON_PATH;
+    process.env.DSH_PET_ELECTRON_PATH = exe;
+    t.after(() => {
+      if (saved === undefined) delete process.env.DSH_PET_ELECTRON_PATH;
+      else process.env.DSH_PET_ELECTRON_PATH = saved;
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    const plain = defaultLaunch({}, false);
+    assert.equal(plain.command, exe);
+    assert.equal(plain.args.length, 1, '常规启动只传 helper 路径');
+    assert.ok(!plain.args.includes('--no-sandbox'));
+
+    const compat = defaultLaunch({}, true);
+    assert.equal(compat.command, exe);
+    assert.deepEqual(compat.args, ['--no-sandbox', plain.args[0]], 'Chromium 开关必须在 app 路径之前');
+  });
+});
+
+describe('渲染兼容模式的落盘记忆', () => {
+  test('resolveInitialRenderCompat：显式开关优先，auto 才看落盘结论', () => {
+    assert.equal(resolveInitialRenderCompat('on', false), true, '强制开启时无视落盘');
+    assert.equal(resolveInitialRenderCompat('off', true), false, '强制关闭时无视落盘');
+    assert.equal(resolveInitialRenderCompat('auto', true), true, 'auto 记住过就沿用');
+    assert.equal(resolveInitialRenderCompat('auto', false), false, 'auto 没记住就常规启动');
+  });
+
+  test('状态文件往返：写入后可读回，缺文件与损坏文件都当作未记忆', (t) => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-pet-compat-'));
+    const path = renderCompatStatePath(dir);
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+
+    assert.equal(readRenderCompatState(path), false, '文件不存在 → false');
+    writeRenderCompatState(path);
+    assert.equal(readRenderCompatState(path), true, '写入后 → true');
+    assert.ok(path.endsWith(join('dsh-pet', 'render-compat.json')), '落在 $DSH_HOME/dsh-pet 下');
+
+    writeFileSync(path, '{ not json');
+    assert.equal(readRenderCompatState(path), false, '损坏的 JSON 不能让启动失败');
+    writeFileSync(path, '{"noSandbox":"yes"}');
+    assert.equal(readRenderCompatState(path), false, '只认布尔 true，字符串不算');
+  });
 });
