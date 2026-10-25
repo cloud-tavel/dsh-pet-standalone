@@ -13,7 +13,30 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noUnusedParameters": true,
+    /*
+     * 类型解析口径对齐「独立模式」构建。
+     *
+     * 打包（tsdown.config.mjs）早就把这三个包 alias 到了 src/standalone/shims/*，
+     * 因为它们只在 DSH 宿主里存在（package.json 把整族 @deepseek-ai/* 放在
+     * peerDependencies），独立模式解析不到。但 tsc 不读 tsdown 的 alias，
+     * 于是类型检查找不到模块（TS2307），lib/types 声明产物也就永远生成不出来。
+     *
+     * 这里的映射让 tsc 和打包用**同一份契约**：类型来自替身，运行也来自替身，
+     * 不会出现"类型按真包、运行按替身"的错位。
+     *
+     * dsh-client-ui-primitives 是唯一只做类型用途的一个（DSH 前端壳的平台种子模块，
+     * 独立模式压根没有浏览器半侧），它的替身永不进产物，见该文件头注释。
+     *
+     * 注意：不要给这些包真的装 node_modules——那会引入 DSH 宿主的整条依赖链，
+     * 与"独立安装包不依赖 DSH"这个前提直接冲突。
+     */
+    "paths": {
+      "@deepseek-ai/dsh-llm": ["./src/standalone/shims/dsh-llm.ts"],
+      "@deepseek-ai/dsh-home-paths": ["./src/standalone/shims/dsh-home-paths.ts"],
+      "@deepseek-ai/dsh-credentials": ["./src/standalone/shims/dsh-credentials.ts"],
+      "@deepseek-ai/dsh-client-ui-primitives": ["./src/standalone/shims/dsh-client-ui-primitives.ts"]
+    }
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"]
