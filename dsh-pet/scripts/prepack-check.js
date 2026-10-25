@@ -15,8 +15,11 @@
  *   3. 原始 1200×1200 母版不得进 npm 包（体积超限，应放 GitHub Releases）
  *   4. client.js 是官方 bundle 形态（__ModuleLoader__.load + exports.apply）
  *   5. package.json 声明了 dsh.bundle 和 dsh.client（否则装不上）
- *   6. 表情包图片确实随包发布（files 白名单含 assets/memes 且目录里有 png；
- *      配图功能只读包内 assets/memes，漏发即功能整体失效），并核对 memes 键与图片对齐
+ *   6. 表情包与发布声明必须自洽：files 声明了 assets/memes 时，目录里就必须真有 png
+ *      （配图只读包内该目录，漏发即功能整体失效）；**未**声明时目录就必须为空——
+ *      本发行版不内置梗图（上游那 27 张社区图原作者无版权可授，见仓库根 NOTICE）。
+ *      两种状态都不许"半拉子"：声明了没图 = 功能废掉，没声明却有图 = 白占体积。
+ *      并核对 memes 键与图片对齐
  *   7. 包总大小 < 200MB（自设软上限，防误塞母版；npm 硬上限远更大）
  *
  * ============================================================================
@@ -120,15 +123,24 @@ else fail('package.json missing dsh.bundle.patch');
 if (pkg.dsh?.client?.platform === 'web') ok('dsh.client.web declared');
 else fail('package.json missing dsh.client platform web');
 
-// ---- 6. 表情包图片必须随包发布（配图功能的素材源） ----
+// ---- 6. 表情包与发布声明自洽（files 声明 ⇄ 目录内容，两个方向都要对上） ----
 // 坑：scripts/prepare.js 每次发布都会用**硬编码白名单覆盖** package.json 的 files，
 // 只在 package.json 里加一行是无效的 → 这里显式断言，防止再次静默漏发。
+//
+// 本发行版**不内置梗图**（上游 27 张社区梗图无版权可授，见仓库根 NOTICE），
+// 因此把上游原来"必须有图"的硬断言改成**模式感知**的两分支：声明要发就必须真有图，
+// 没声明就必须真没图。这样既保住"漏发导致配图整体失效"的防护，
+// 又不会让合规清场后的仓库永远卡在发布门禁上。
 const memesDir = join(ROOT, 'assets', 'memes');
-if (Array.isArray(pkg.files) && pkg.files.includes('assets/memes')) ok('files includes assets/memes');
-else fail('package.json files must include assets/memes (meme images would not ship)');
+const shipsMemes = Array.isArray(pkg.files) && pkg.files.includes('assets/memes');
 const memePngs = existsSync(memesDir) ? readdirSync(memesDir).filter((n) => n.endsWith('.png')) : [];
-if (memePngs.length > 0) ok(`meme images present (${memePngs.length} png)`);
-else fail('no png in assets/memes (whisper/chat 配图会整体失效)');
+if (shipsMemes) {
+  if (memePngs.length > 0) ok(`meme images present (${memePngs.length} png)`);
+  else fail('files 声明要发布 assets/memes，但目录里没有 png（配图会整体失效）');
+} else {
+  if (memePngs.length === 0) ok('memes not shipped (本发行版不内置梗图，files 未声明且目录无 png)');
+  else fail(`files 未声明 assets/memes，但目录里还有 ${memePngs.length} 张 png（不会随包发布，白占体积）`);
+}
 // memes 键 ↔ 图片文件对齐：缺图条目会被 host 静默剔除（设计如此，不阻断发布），
 // 但数字对不上值得发布前看一眼，故只提示
 try {
