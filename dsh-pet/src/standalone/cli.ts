@@ -16,8 +16,9 @@
  *   node lib/standalone.js --check      # 只体检，不开窗口
  *
  * 独立模式的边界：动画、物理拖拽、右键菜单、多开、自定义素材与宠物种类全部可用；
- * 余额、碎碎念、对话、系统通知依赖 DSH 的凭证/模型/会话，在独立模式下明确不可用
- * （结构化失败 + 日志，不假装成功）。详见 README 的「独立运行（不打开 DSH）」一节。
+ * 对话与本机余额只要在设置里填了自己的 API Key 就能用（余额仅限有公开接口的服务商，目前是
+ * DeepSeek 官方；见 ./balance.ts）；会话工作状态与 DSH 系统通知依赖 DSH 会话，独立模式下
+ * 明确不可用（结构化失败 + 日志，不假装成功）。详见 README 的「独立运行（不打开 DSH）」一节。
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -28,6 +29,7 @@ import { apply } from '../host/index';
 import { defaultLog, setDefaultLogger } from '../host/log-file';
 import { runCheck, packageVersion } from './check';
 import { createStandaloneAi } from './ai-provider';
+import { balanceSupported } from './balance';
 import { createRequestSecurity } from './request-security';
 import { writeStandaloneRuntime } from './runtime-state';
 import {
@@ -156,7 +158,12 @@ async function run(logger: StandaloneLogger, options: { port: number }): Promise
     ai.isReady()
       ? '  AI          本机 API 已启用；自动碎碎念遵循设置页开关'
       : '  AI          未配置或未启用，不发送模型请求；右键“打开 AI 设置”后在本机填写',
-    '  不可用      余额 / 会话工作状态 / DSH 系统通知',
+    // 余额能不能查取决于「你填的那家服务商有没有公开的余额接口」，不是取决于有没有接 DSH。
+    // 之前这里写死「不可用」，接上 DeepSeek 官方接口后就会自相矛盾。
+    ai.isReady() && balanceSupported(ai.getSettings().baseUrl)
+      ? '  余额        可查（走你填的服务商官方接口）'
+      : '  余额        不可查（当前服务商没有公开余额接口，或 AI 未启用）',
+    '  不可用      会话工作状态 / DSH 系统通知',
     '  退出        Ctrl+C、POST /shutdown，或桌面托盘菜单的「退出」',
     '',
   ]) {

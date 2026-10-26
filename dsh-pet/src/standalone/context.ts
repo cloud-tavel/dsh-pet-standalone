@@ -19,10 +19,50 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { registerBalanceProvider } from '../host/balance';
 import { createFileLogger } from '../host/log-file';
+import { queryStandaloneBalance } from './balance';
 
 /** 独立模式下余额路由报出的服务商 id（未登记 → `unsupported`，气泡里能看到它） */
 export const STANDALONE_PROVIDER = 'standalone';
+
+/**
+ * 余额桥的进程内单例。
+ *
+ * 注册表是模块级全局状态（`host/balance/registry.ts` 的 external Map），而独立模式进程里
+ * 只该有一份 AI 实例；重复 createStandaloneContext（单测、或重新 apply）时先摘掉旧的再挂新的，
+ * 免得第二次注册撞上「该服务商 id 已被注册」，或者把闭包留在上一个已 dispose 的 ai 上。
+ */
+let balanceBridge: { ai: StandaloneModelService; unregister: () => void } | undefined;
+
+/**
+ * 把 `standalone` 这一个 id 接进余额表（实现见 ./balance.ts）。
+ *
+ * 不登记的话，每次刷新都命中"未在名录里"分支 → `unsupported` → 桌宠弹
+ * 「当前服务商暂不支持余额查询」。可用户填的 baseUrl 本来就是 DeepSeek 官方，
+ * 余额接口就在那儿——错的不是用户，是我们没把自己是谁告诉余额模块。
+ */
+function attachBalanceBridge(ai: StandaloneModelService, logger: StandaloneLogger): void {
+  if (!ai.balanceCredentials) return;
+  if (balanceBridge?.ai === ai) return;
+  balanceBridge?.unregister();
+  balanceBridge = undefined;
+  try {
+    const unregister = registerBalanceProvider({
+      id: STANDALONE_PROVIDER,
+      async fetch({ provider }) {
+        const credentials = ai.balanceCredentials?.();
+        if (!credentials) throw new Error('AI 还没启用，先到设置里填写接口地址与 API Key');
+        const result = await queryStandaloneBalance(credentials);
+        return { ok: true, provider, shape: result.shape, data: result.data };
+      },
+    });
+    balanceBridge = { ai, unregister };
+  } catch (error) {
+    // 注册失败不影响其它能力：余额退回 unsupported，对话照旧
+    logger.warn(`余额查询桥注册失败（余额会显示为不支持）：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 /** 独立模式的日志接口（与插件对 `ctx.logger` 的使用面一致） */
 export interface StandaloneLogger {
@@ -51,6 +91,11 @@ export interface StandaloneModelService {
   isReady(): boolean;
   canWhisper(): boolean;
   getSettings(): { whisperIntervalSec: number };
+  /**
+   * 余额查询凭据（设置里的 baseUrl + apiKey）。可选：只在真接了 AI 的实现里有，
+   * 测试替身可以不给——缺它时余额桥不注册，行为与接 AI 之前一致（unsupported）。
+   */
+  balanceCredentials?(): { baseUrl: string; apiKey: string } | undefined;
   dispose(): void;
 }
 
@@ -148,6 +193,9 @@ export function createStandaloneContext(options: StandaloneContextOptions): Stan
       };
     },
   };
+
+  // 独立模式的余额：把 'standalone' 接进余额表（见文件顶部的 attachBalanceBridge 说明）
+  if (ai) attachBalanceBridge(ai, logger);
 
   const context: Record<string, unknown> = {
     /**

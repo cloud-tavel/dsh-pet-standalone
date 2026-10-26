@@ -44,6 +44,14 @@ export interface StandaloneAiService {
   }): Promise<{ ok: boolean; message: string; reply?: string }>;
   isReady(): boolean;
   canWhisper(): boolean;
+  /**
+   * 余额查询用的凭据：设置里那份 baseUrl + apiKey。
+   *
+   * 为什么不复用 `getSettings()`：那个返回的是**公开视图**（只给 `hasKey` 布尔，绝不含密钥）。
+   * 余额要发到用户自己的服务商，必须拿到真 key，所以单独开一个只给内部调用的口子，
+   * 且不对外暴露（不进 HTTP 响应、不进日志）。未就绪（未启用/缺字段）时返回 undefined。
+   */
+  balanceCredentials(): { baseUrl: string; apiKey: string } | undefined;
   dispose(): void;
 }
 /** Optional third argument is an isolated transport/clock seam; production uses official SDKs. */
@@ -222,6 +230,11 @@ export function createStandaloneAi(
       }
     },
     isReady: ready,
+    balanceCredentials: () => {
+      if (!ready()) return undefined;
+      const current = store.current();
+      return { baseUrl: current.baseUrl, apiKey: current.apiKey };
+    },
     async testConnection(input: { protocol?: string; baseUrl?: string; model?: string; apiKey?: string }) {
       if (disposed) return { ok: false, message: '服务已关闭' };
       const current = store.current();
