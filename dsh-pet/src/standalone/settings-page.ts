@@ -24,6 +24,10 @@ export const settingsPage = `<!doctype html>
 <div><label for="maxTokens">单次输出上限（tokens）</label><input id="maxTokens" type="number" min="128" max="4096" step="1" value="1024" required></div></div>
 <p class="hint">间隔至少 60 秒，默认 300 秒。输出上限越小，单次回复越简短。</p>
 </fieldset>
+<fieldset><legend>看见屏幕（实验）</legend>
+<label class="check"><input id="visionEnabled" type="checkbox" aria-describedby="vision-note">对话时让桌宠看一眼当前屏幕</label>
+<p id="vision-note" class="notice">开启后，每次「对话」会把当前屏幕的截图（约半分辨率 JPEG，不落盘、不进对话记忆）与你的消息一起发送给你配置的模型服务商，用于理解画面；碎碎念不带图。需要支持视觉的模型（如 deepseek-flash），且仅限 OpenAI 兼容协议。默认关闭。</p>
+</fieldset>
 <footer><p id="privacy">所有配置与密钥仅保存在当前机器。<br>关闭 AI 后，桌宠仍可正常显示、移动与互动。</p><button id="save" type="submit" disabled>保存到本机</button></footer>
 <p id="status" role="status" aria-live="polite">正在读取本机设置…</p>
 </form><noscript>需要启用 JavaScript 才能保存设置。请从桌宠菜单打开本页。</noscript></main></body></html>`;
@@ -66,7 +70,7 @@ export const settingsScript = `
     for (const id of ['protocol','baseUrl','model','whisperIntervalSec','maxTokens']) {
       if (data[id] !== undefined) get(id).value = String(data[id]);
     }
-    for (const id of ['enabled','automaticWhispers']) get(id).checked = data[id] === true;
+    for (const id of ['enabled','automaticWhispers','visionEnabled']) get(id).checked = data[id] === true;
     get('key-state').textContent = data.hasKey ? '已保存 · 不回显' : '尚未设置';
     get('apiKey').value = '';
     get('clearApiKey').checked = false;
@@ -132,6 +136,7 @@ export const settingsScript = `
       protocol: get('protocol').value, baseUrl: get('baseUrl').value.trim(), model: get('model').value.trim(),
       apiKey: get('apiKey').value, clearApiKey: get('clearApiKey').checked,
       enabled: get('enabled').checked, automaticWhispers: get('automaticWhispers').checked,
+      visionEnabled: get('visionEnabled').checked,
       whisperIntervalSec: Number(get('whisperIntervalSec').value), maxTokens: Number(get('maxTokens').value)
     };
     get('apiKey').value = '';

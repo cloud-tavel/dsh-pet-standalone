@@ -120,6 +120,13 @@ export function mountChatDialog(opts: {
   const baseUrl = opts.baseUrl ?? '/dsh-pet-7340/chat';
   // `surface` 必填（宿主校验）；这个 URL 只用于 POST 发送——GET 读记忆那条路不需要它
   const withPet = baseUrl + '?pet=' + encodeURIComponent(petId) + '&surface=' + surface;
+  // 「看见屏幕」预取（可选能力的延迟优化）：弹窗一打开就请宿主截一张进 30s 缓存，
+  // 等用户按下回车，画面已经在缓存里（省掉 ~700ms 现场截屏）。开关关闭时宿主空转；
+  // 路由不存在（DSH 宿主 / 旧版）或网络失败一律静默——它不是功能前提，只是加速。
+  const prefetchUrl = baseUrl.replace(/\/chat$/, '/vision/prefetch');
+  if (prefetchUrl !== baseUrl) {
+    void fetch(prefetchUrl, { method: 'POST', signal: AbortSignal.timeout(8_000) }).catch(() => {});
+  }
   const c =
     clamp && Number.isFinite(clamp.x + clamp.y + clamp.w + clamp.h)
       ? clamp

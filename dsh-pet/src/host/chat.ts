@@ -57,6 +57,17 @@ function imageInstruction(pool: MemeEntry[]): string {
   );
 }
 
+/** 「看见屏幕」能力的最小形状（独立模式注入，DSH 宿主没有 → undefined → 行为与关闭一致）。
+ *  实现见 standalone/vision.ts：30s 缓存 + 不落盘；失败返回 undefined（降级纯文本）。 */
+export interface ChatVision {
+  take(signal?: AbortSignal): Promise<string | undefined>;
+}
+
+/** 带图时的随图说明：告诉模型这张截图是什么、怎么用、隐私红线（防止它复述屏幕上的敏感文字）。 */
+const VISION_HINT =
+  '\n\n（随这条消息附了一张当前电脑屏幕的截图。如果用户的问题和画面有关，就结合画面回答；' +
+  '与画面无关就照常聊天，不要主动描述画面。不要复述画面里的账号、密码、私信等敏感文字。）';
+
 /**
  * 生成一句对话回复。
  * @param ctx 宿主上下文（注入 agentDefaultModel / llm）
@@ -65,6 +76,7 @@ function imageInstruction(pool: MemeEntry[]): string {
  * @param userText 用户刚输入的话
  * @param pool 表情包候选池（开启对话配图时传入；空/缺省 = 纯文本，指令与解析都不介入）
  * @param preferred 条目配置单独指定的模型（chatModel）；缺省 / 留空 = 只用当前对话的模型
+ * @param vision 「看见屏幕」能力（可选；独立模式注入，DSH 宿主缺省 undefined = 纯文本）
  * @returns 回复文本（+ 命中池内的配图名），或结构化失败（provider 缺失 / 生成错误）
  */
 export async function generateChat(
@@ -74,6 +86,7 @@ export async function generateChat(
   userText: string,
   pool: MemeEntry[] = [],
   preferred?: ModelRef,
+  vision?: ChatVision,
 ): Promise<ChatGenerateResult> {
   // 候选链：配置的模型优先 → 当前对话的模型兜底（chatModel 留空时链上只有后者，与旧版逐字一致）
   const candidates = modelCandidates(ctx, preferred);
@@ -84,12 +97,21 @@ export async function generateChat(
   if (!llm || typeof llm.stream !== 'function') {
     return { ok: false, reason: 'generate-error', message: 'LLM 服务不可用' };
   }
+  // 截屏一次（候选链外）：多候选重试不该重复抓帧；失败静默降级为纯文本
+  let shot: string | undefined;
+  if (vision) {
+    try {
+      shot = await vision.take();
+    } catch {
+      shot = undefined;
+    }
+  }
   // 依次尝试：配置的模型失败（凭据被删 / 模型下架 / 该服务商没配 key）时**回落到当前对话的模型
   // 重试一次**，仍失败才抛出失败原因——最后一次是用户当前真正在用的模型，报错更有意义。
   // 兜底文案与失败分支同源，避免两处字面量漂移
   let last: ChatGenerateResult = { ok: false, reason: 'generate-error', message: noTextReason(undefined) };
   for (const [i, sel] of candidates.entries()) {
-    const result = await generateWith(ctx, llm, sel, system, history, userText, pool);
+    const result = await generateWith(ctx, llm, sel, system, history, userText, pool, shot);
     if (result.ok) return result;
     last = result;
     // 回落要留痕：配的模型没生效时能在日志里看到原因（否则"我明明配了 A，怎么还是用 B"没法查）
@@ -112,6 +134,7 @@ async function generateWith(
   history: ChatMemoryMessage[],
   userText: string,
   pool: MemeEntry[],
+  shot?: string,
 ): Promise<ChatGenerateResult> {
   // 历史 → dsh-llm 消息：user 经 createUserMessage（plugin 来源），assistant 经 createAssistantMessage
   const historyMessages = history.map((m) =>
@@ -133,6 +156,14 @@ async function generateWith(
   const supportsOff = await supportsReasoningOff(ctx, sel.provider, sel.model);
   // 配图：池非空才把清单与指令附进 user 正文（空池 = 关闭配图，正文与旧行为逐字一致）
   const wantImage = pool.length > 0;
+  // 截图块：只在**当前这条** user 消息上带图（历史永远是纯文本，记忆里也只存正文）
+  const userBlocks: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = [
+    { type: 'text', text: wantImage ? userText + imageInstruction(pool) : userText },
+  ];
+  if (shot) {
+    userBlocks.push({ type: 'image_url', image_url: { url: shot } });
+    userBlocks.push({ type: 'text', text: VISION_HINT });
+  }
   const options = {
     provider: sel.provider,
     model: sel.model,
@@ -141,7 +172,7 @@ async function generateWith(
     messages: [
       ...historyMessages,
       createUserMessage({
-        content: [{ type: 'text', text: wantImage ? userText + imageInstruction(pool) : userText }],
+        content: userBlocks,
         source: { kind: 'user' },
       }),
     ],

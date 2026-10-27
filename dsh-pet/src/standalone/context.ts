@@ -90,7 +90,8 @@ export interface StandaloneModelService {
   stream(options: unknown): AsyncIterable<unknown>;
   isReady(): boolean;
   canWhisper(): boolean;
-  getSettings(): { whisperIntervalSec: number };
+  /** 碎碎念周期；visionEnabled 是「看见屏幕」开关（可选：旧测试替身没有该字段 = 关闭）。 */
+  getSettings(): { whisperIntervalSec: number; visionEnabled?: boolean };
   /**
    * 余额查询凭据（设置里的 baseUrl + apiKey）。可选：只在真接了 AI 的实现里有，
    * 测试替身可以不给——缺它时余额桥不注册，行为与接 AI 之前一致（unsupported）。
@@ -247,6 +248,8 @@ export function createStandaloneContext(options: StandaloneContextOptions): Stan
             isReady: () => ai.isReady(),
             canWhisper: () => ai.canWhisper(),
             whisperIntervalSec: () => ai.getSettings().whisperIntervalSec,
+            // 「看见屏幕」开关（host/vision.ts 每次截屏前实时读，改设置即时生效）
+            visionEnabled: () => ai.getSettings().visionEnabled === true,
           },
         }
       : {}),

@@ -3,9 +3,13 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { StandaloneAiSettings } from './ai-config';
 
 export type AiFetch = typeof globalThis.fetch;
+/** user 消息里的一个内容块：文本或图片（data URL，见 ./vision.ts 的截屏）。 */
+export type AiContentBlock = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+/** 消息内容：纯文本（绝大多数请求）或块数组（带图的那条 user 消息）。 */
+export type AiContent = string | AiContentBlock[];
 export interface AiTextMessage {
   role: 'user' | 'assistant';
-  content: string;
+  content: AiContent;
 }
 export interface AiRequest {
   system: string;
@@ -62,9 +66,18 @@ export async function* sdkTextStream(
   };
   if (settings.protocol === 'openai-compatible') {
     const client = new OpenAI({ ...shared, organization: null, project: null, webhookSecret: null });
+    // 带图消息的块数组形状与 OpenAI Chat Completions 完全一致（text / image_url），
+    // 原样透传即可；纯文本消息保持字符串 content（与旧行为逐字一致，利于上游缓存命中）。
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       ...(request.system ? [{ role: 'system' as const, content: request.system }] : []),
-      ...request.messages,
+      ...request.messages.map((message) =>
+        typeof message.content === 'string'
+          ? ({ role: message.role, content: message.content } as OpenAI.Chat.Completions.ChatCompletionMessageParam)
+          : ({
+              role: message.role,
+              content: message.content,
+            } as OpenAI.Chat.Completions.ChatCompletionMessageParam),
+      ),
     ];
     const stream = await client.chat.completions.create(
       { model: settings.model, messages, stream: true, max_tokens: settings.maxTokens, n: 1 },
@@ -81,11 +94,23 @@ export async function* sdkTextStream(
   const client = new Anthropic({ ...shared, authToken: null, webhookKey: null });
   const opus = settings.model === 'claude-opus-5-5';
   const firstParty = new URL(settings.baseUrl).origin === 'https://api.anthropic.com';
+  // Anthropic 协议不收图片块：带图消息已在 provider 层被显式拒绝（openai-compatible only），
+  // 这里做的是形状收口——块数组按纯文本拼接（防御性，正常到不了这里）。
+  const toAnthropicContent = (content: AiContent): string => {
+    if (typeof content === 'string') return content;
+    return content
+      .map((block) => (block.type === 'text' ? block.text : ''))
+      .join('')
+      .trim();
+  };
   const parameters = {
     model: settings.model,
     max_tokens: settings.maxTokens,
     system: request.system,
-    messages: request.messages,
+    messages: request.messages.map((message) => ({
+      role: message.role as 'user' | 'assistant',
+      content: toAnthropicContent(message.content),
+    })),
     stream: true as const,
     ...(opus ? { thinking: { type: 'adaptive' as const }, output_config: { effort: 'low' as const } } : {}),
   };

@@ -94,6 +94,7 @@
  *             依赖可解析后替换为 DSH 官方类型。
  */
 import { createReadStream, existsSync, fstatSync, readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
@@ -117,6 +118,7 @@ import {
 import { decideAnim } from './anim';
 import { LockStore } from './lock';
 import { createFileLogger, isFileLogger, setDefaultLogger } from './log-file';
+import { createVision } from './vision';
 import { MENU_WAIT_MAX_MS, MenuRegistry } from './menu';
 import { decidePosition, decideThrow, positionLeafData } from './motion-cue';
 import { parsePlaybackPath, parseWaitQuery, PlaybackStore } from './playback';
@@ -927,8 +929,18 @@ export function apply(ctx: any): void {
       // rounds = 0（用户关掉历史）→ 空历史；否则截尾部 rounds 轮（1 轮 = 1 问 1 答）。
       // 不能写 slice(-rounds * 2)：-0 在 JS 里 === 0，slice(-0) 返回整个数组而不是空。
       const list = sliceMemoryRounds(entry.messages, rounds);
-      // 模型：条目配置的 chatModel 优先（留空 = 不指定）；生成侧失败会回落到当前对话的模型重试一次
-      const generated = await generateChat(ctx, system, list, text, pool, configuredModel(found.conf, 'chatModel'));
+      // 模型：条目配置的 chatModel 优先（留空 = 不指定）；生成侧失败会回落到当前对话的模型重试一次。
+      // 看见屏幕（可选）：弹窗打开时已预取（POST /vision/prefetch），这里通常命中 30s 缓存 0 开销；
+      // 开关关闭 / 截屏失败时 take() 返回 undefined → 纯文本，行为与关闭一致。
+      const generated = await generateChat(
+        ctx,
+        system,
+        list,
+        text,
+        pool,
+        configuredModel(found.conf, 'chatModel'),
+        screenVision,
+      );
       if (!generated.ok) return generated;
       const now = Date.now();
       entry.messages.push({ role: 'user', content: text, ts: now });
@@ -1117,6 +1129,27 @@ export function apply(ctx: any): void {
   let startRetryTimer: NodeJS.Timeout | undefined;
   let electronEnsure: Promise<void> | undefined;
   let disposed = false;
+  /**
+   * 「看见屏幕」（可选能力，./vision.ts）：对话时附带当前屏幕截图。
+   *
+   * 截屏不在本进程做——desktopCapturer 只在 Electron 进程可用，而宿主可能是纯 Node
+   * （独立模式 lib/standalone.js）。唯一的 Electron 进程是桌面 Helper，经 capture RPC
+   * （HelperProcess.requestCapture）取图；Helper 不在（网页-only / 应用模式 / 还没起来）
+   * 时 capture 返回 undefined → 这条对话降级纯文本，绝不报错。
+   *
+   * 开关读独立模式 AI 设置（standaloneAi.visionEnabled，实时）；DSH 宿主没有这个服务 →
+   * 恒 false → 行为与「功能不存在」一致。DSH_PET_CAPTURE_SECRET 在拉起 Helper 时生成，
+   * 只经子进程环境变量传递，不落盘、不进日志。
+   */
+  const screenVision = createVision({
+    capture: () => helper?.requestCapture() ?? Promise.resolve(undefined),
+    enabled: () => {
+      const policy = optionalService('standaloneAi') as { visionEnabled?: () => boolean } | undefined;
+      return policy?.visionEnabled?.() === true;
+    },
+    logger: log,
+  });
+  ctx.effect(() => () => screenVision.clear());
   /** 「无图形环境」提示只在进程生命周期内打一次，避免守护循环刷屏 */
   let displayWarned = false;
   /** 「无桌面宠物 → 跳过」的 info 只打一次：纯网页用户每次启动都会走这条短路，不该刷屏 */
@@ -1188,6 +1221,9 @@ export function apply(ctx: any): void {
           DSH_PET_SCALE: '1',
           // 打开 bridge 协议：main.js 注册 dsh-pet-bridge scheme，把渲染端请求经管道转给宿主
           DSH_PET_BRIDGE: '1',
+          // 截屏 RPC 的来源校验密钥（看见屏幕）：本进程生成，只经环境变量递给 helper，
+          // 不落盘、不进日志；helper 用它挡住其它本地进程对 /vision-capture 的盲调
+          DSH_PET_CAPTURE_SECRET: randomBytes(16).toString('hex'),
           // 每只桌面宠物一个局部小窗口：透传宠物列表（[{id,size}]）
           DSH_PET_PETS: JSON.stringify(desktopPetList()),
         },
@@ -1433,6 +1469,23 @@ export function apply(ctx: any): void {
         return { kind: 'json', status: 200, obj: readAllConfig(configPaths) };
       }
       return { kind: 'json', status: 405, obj: { error: 'method not allowed' } };
+    }
+
+    // 「看见屏幕」（可选能力，./vision.ts）：
+    //  - POST /vision/prefetch —— 对话弹窗打开时预取一张进 30s 缓存（fire-and-forget）；
+    //  - GET  /vision/state —— 诊断：只含开关 / 新鲜度 / 尺寸 / 计数，绝不含画面内容。
+    // 开关关闭时 prefetch 空转、state 如实报 enabled:false（测试据此断言「关就是关」）。
+    if (rest === 'vision/prefetch' || rest === 'vision/state') {
+      if (rest === 'vision/prefetch' && method !== 'POST') {
+        return { kind: 'json', status: 405, obj: { error: 'method not allowed' } };
+      }
+      if (rest === 'vision/state' && method !== 'GET') {
+        return { kind: 'json', status: 405, obj: { error: 'method not allowed' } };
+      }
+      if (rest === 'vision/prefetch') screenVision.prefetch();
+      const visionEnabled =
+        (optionalService('standaloneAi') as { visionEnabled?: () => boolean } | undefined)?.visionEnabled?.() === true;
+      return { kind: 'json', status: 200, obj: { enabled: visionEnabled, ...screenVision.state() } };
     }
 
     // 单只宠物的显示位置（桌面端右键「关闭桌面显示」→ POST /pet-display）。

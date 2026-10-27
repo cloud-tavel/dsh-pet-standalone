@@ -368,3 +368,131 @@ test('testConnection checks parameters and reports success or friendly error', a
     },
   );
 });
+
+// ---------- 看见屏幕：图片块链路（visionEnabled 截屏随 user 消息下发） ----------
+
+const IMAGE_URL = 'data:image/jpeg;base64,' + 'A'.repeat(64);
+const imageOptions = {
+  provider: 'standalone',
+  model: 'test-model',
+  system: 'system',
+  messages: [
+    { role: 'user', content: [{ type: 'text', text: 'history' }], source: { kind: 'user' } },
+    { role: 'assistant', content: 'earlier reply', source: {} },
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: '我在干嘛' },
+        { type: 'image_url', image_url: { url: IMAGE_URL } },
+      ],
+      source: { kind: 'user' },
+    },
+  ],
+};
+
+test('image blocks pass through to openai-compatible body; text history stays string content', async () => {
+  let request: RequestInit | undefined;
+  await fixture(
+    async (ai) => {
+      assert.equal(await collect(ai.stream(imageOptions)), 'hi');
+      const body = JSON.parse(String(request?.body));
+      assert.equal(body.messages.length, 4);
+      assert.deepEqual(body.messages[0], { role: 'system', content: 'system' });
+      // 纯文本历史保持字符串 content（利于上游缓存命中），不升级成块数组
+      assert.deepEqual(body.messages[1], { role: 'user', content: 'history' });
+      assert.deepEqual(body.messages[2], { role: 'assistant', content: 'earlier reply' });
+      // 带图消息按块数组原样下发
+      assert.deepEqual(body.messages[3].content, [
+        { type: 'text', text: '我在干嘛' },
+        { type: 'image_url', image_url: { url: IMAGE_URL } },
+      ]);
+    },
+    (_url, init) => {
+      request = init;
+      return Promise.resolve(openAiResponse('hi'));
+    },
+  );
+});
+
+test('images are rejected in assistant messages, beyond one per message, and oversized', async () => {
+  await fixture(
+    async (ai) => {
+      await assert.rejects(
+        collect(
+          ai.stream({
+            ...imageOptions,
+            messages: [{ role: 'assistant', content: [{ type: 'image_url', image_url: { url: IMAGE_URL } }] }],
+          }),
+        ),
+        /user messages/,
+      );
+      await assert.rejects(
+        collect(
+          ai.stream({
+            ...imageOptions,
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  { type: 'image_url', image_url: { url: IMAGE_URL } },
+                  { type: 'image_url', image_url: { url: IMAGE_URL } },
+                ],
+              },
+            ],
+          }),
+        ),
+        /Too many images/,
+      );
+      const huge = 'data:image/jpeg;base64,' + 'A'.repeat(6_000_001);
+      await assert.rejects(
+        collect(
+          ai.stream({
+            ...imageOptions,
+            messages: [{ role: 'user', content: [{ type: 'image_url', image_url: { url: huge } }] }],
+          }),
+        ),
+        /image/,
+      );
+    },
+    async () => openAiResponse('hi'),
+  );
+});
+
+test('anthropic protocol rejects image requests explicitly before any network call', async () => {
+  let calls = 0;
+  await fixture(
+    async (ai) => {
+      await assert.rejects(collect(ai.stream(imageOptions)), /openai-compatible protocol/);
+      assert.equal(calls, 0);
+    },
+    async () => {
+      calls++;
+      return new Response('{"content":[{"type":"text","text":"hi"}]}', {
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+    'anthropic',
+  );
+});
+
+test('settings saved before visionEnabled existed still load (upgrade compatibility)', async () => {
+  const { writeAiSettings, readAiSettings } = await import('./ai-storage.ts');
+  const { createAiConfig, DEFAULT_AI_SETTINGS } = await import('./ai-config.ts');
+  const home = mkdtempSync(join(tmpdir(), 'pet-ai-'));
+  try {
+    // 模拟旧版配置文件：没有 visionEnabled 字段（enabled=false：旧配置本来就是关着的）
+    const legacySettings = { ...DEFAULT_AI_SETTINGS } as Record<string, unknown>;
+    delete legacySettings.visionEnabled;
+    writeAiSettings(home, legacySettings);
+    const legacy = readAiSettings(home) as Record<string, unknown>;
+    assert.equal('visionEnabled' in legacy, false);
+    const store = createAiConfig(home);
+    assert.equal(store.current().visionEnabled, false);
+    assert.equal(store.current().enabled, false);
+    // 保存一次（写入 visionEnabled）后再读：字段持久化且值保留
+    void (await store.save({ enabled: false }));
+    assert.equal(store.current().visionEnabled, false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

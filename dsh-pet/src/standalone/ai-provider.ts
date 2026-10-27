@@ -3,7 +3,7 @@ import type { StandaloneLogger } from './context';
 import { createAiConfig } from './ai-config';
 import type { StandaloneAiPublicSettings } from './ai-config';
 import { isAuthenticationFailure, isRateLimitFailure, sdkTextStream } from './ai-transport';
-import type { AiFetch, AiRequest, AiTransportEvent } from './ai-transport';
+import type { AiContent, AiFetch, AiRequest, AiTransportEvent } from './ai-transport';
 
 const PROVIDER = 'standalone';
 const MAX_INPUT_CHARS = 32_768;
@@ -11,7 +11,23 @@ const MAX_OUTPUT_CHARS = 16_384;
 const MAX_EVENTS = 4096;
 const REQUESTS_PER_MINUTE = 6;
 const RATE_WINDOW_MS = 60_000;
+/**
+ * 单个图片块（data URL）的长度上限。视觉截屏走 ./vision.ts，半分辨率 JPEG base64
+ * 实测约 0.2~0.3MB；这里放宽到 6MB 字符（≈4.5MB 原始字节）——足够覆盖正常截屏，
+ * 又远低于 DeepSeek 的 48MiB 请求体上限，防止把异常巨大的 payload 透传出去。
+ */
+const MAX_IMAGE_URL_CHARS = 6_000_000;
+/** 每条消息最多带几张图：桌宠场景只需要 1 张（当前屏幕），多出来的一律拒绝。 */
+const MAX_IMAGES_PER_MESSAGE = 1;
 const textBlock = z.object({ type: z.literal('text'), text: z.string().max(MAX_INPUT_CHARS) });
+const imageBlock = z
+  .object({
+    type: z.literal('image_url'),
+    image_url: z.object({ url: z.string().max(MAX_IMAGE_URL_CHARS) }).strict(),
+  })
+  .strict();
+/** Anthropic 协议的图片块形状不同（base64 source），独立模式不做双协议转换：明确拒绝比静默丢图诚实。 */
+const ANTHROPIC_IMAGE_UNSUPPORTED = 'Standalone AI images require the openai-compatible protocol.';
 const messageSchema = z.object({
   role: z.enum(['user', 'assistant']),
   content: z.union([z.string().max(MAX_INPUT_CHARS), z.array(z.unknown()).max(128)]),
@@ -65,28 +81,62 @@ function parseRequest(options: unknown, model: string): { request: AiRequest; si
   if (!parsed.success || parsed.data.model !== model)
     throw new Error('Invalid standalone AI model selection or input.');
   const { data } = parsed;
+  let totalImages = 0;
   const messages = data.messages
-    .map((message) => ({
-      role: message.role,
-      content:
-        typeof message.content === 'string'
-          ? message.content
-          : message.content
-              .map((block) => {
-                // Unknown/non-text blocks and DSH source metadata never cross the API boundary.
-                if (typeof block !== 'object' || block === null || !('type' in block) || block.type !== 'text')
-                  return '';
-                const result = textBlock.safeParse(block);
-                if (!result.success) throw new Error('Invalid standalone AI text input.');
-                return result.data.text;
-              })
-              .join(''),
-    }))
-    .filter((message) => message.content.trim().length > 0);
+    .map((message) => {
+      if (typeof message.content === 'string') {
+        return { role: message.role, content: message.content };
+      }
+      // 文本块拼成正文（历史消息只有文本）；图片块原样保留——桌宠的「看见屏幕」
+      // 只在**最后一条 user 消息**上带图（./vision.ts 截屏），历史里出现图片属于调用方 bug。
+      let text = '';
+      const images: string[] = [];
+      for (const block of message.content) {
+        // Unknown/non-text blocks and DSH source metadata never cross the API boundary.
+        if (typeof block !== 'object' || block === null || !('type' in block)) continue;
+        if (block.type === 'text') {
+          const result = textBlock.safeParse(block);
+          if (!result.success) throw new Error('Invalid standalone AI text input.');
+          text += result.data.text;
+          continue;
+        }
+        if (block.type === 'image_url') {
+          if (message.role !== 'user') throw new Error('Images are only allowed in user messages.');
+          if (images.length >= MAX_IMAGES_PER_MESSAGE) throw new Error('Too many images in one message.');
+          const result = imageBlock.safeParse(block);
+          if (!result.success) throw new Error('Invalid standalone AI image input.');
+          images.push(result.data.image_url.url);
+          continue;
+        }
+      }
+      totalImages += images.length;
+      const content: AiContent =
+        images.length > 0
+          ? [
+              ...(text ? [{ type: 'text' as const, text }] : []),
+              ...images.map((url) => ({ type: 'image_url' as const, image_url: { url } })),
+            ]
+          : text;
+      return { role: message.role, content };
+    })
+    // 与旧行为一致：既无文本也无图片的消息直接丢掉（OpenAI 端会拒空 content）
+    .filter((message) => (typeof message.content === 'string' ? message.content.trim().length > 0 : true));
   const system = data.system ?? '';
-  const size = system.length + messages.reduce((sum, message) => sum + message.content.length, 0);
+  const size =
+    system.length +
+    messages.reduce((sum, message) => {
+      const content = message.content;
+      if (typeof content === 'string') return sum + content.length;
+      return (
+        sum +
+        content.reduce(
+          (acc, block) => acc + (block.type === 'text' ? block.text.length : block.image_url.url.length),
+          0,
+        )
+      );
+    }, 0);
   if (
-    size > MAX_INPUT_CHARS ||
+    size > MAX_INPUT_CHARS + totalImages * MAX_IMAGE_URL_CHARS ||
     messages.length === 0 ||
     messages[0].role !== 'user' ||
     messages[messages.length - 1]?.role !== 'user'
@@ -94,6 +144,11 @@ function parseRequest(options: unknown, model: string): { request: AiRequest; si
     throw new Error('Standalone AI input is empty or exceeds limits.');
   }
   return { request: { system, messages }, signal: data.signal };
+}
+
+/** 请求里是否带了图片块（决定 Anthropic 协议的显式拒绝）。 */
+function requestHasImages(request: AiRequest): boolean {
+  return request.messages.some((message) => typeof message.content !== 'string');
 }
 
 function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -141,6 +196,11 @@ export function createStandaloneAi(
     const { request, signal: callerSignal } = parseRequest(options, settings.model);
     if (callerSignal?.aborted) throw new Error('Standalone AI request cancelled.');
     if (active) throw new Error('Standalone AI is busy. Please wait.');
+    // 带图请求只支持 OpenAI 兼容协议：Anthropic 的图片块形状不同，独立模式不做转换——
+    // 在发请求之前明确拒绝，而不是把图静默丢掉让模型「看不见却装作看见」。
+    if (settings.protocol === 'anthropic' && requestHasImages(request)) {
+      throw new Error(ANTHROPIC_IMAGE_UNSUPPORTED);
+    }
     const recent = requests.filter((time) => now() - time < RATE_WINDOW_MS);
     if (recent.length >= REQUESTS_PER_MINUTE) throw new Error('Standalone AI rate limit reached. Please wait.');
     requests = [...recent, now()];
@@ -187,6 +247,7 @@ export function createStandaloneAi(
           'Standalone AI could not answer this request.',
           'Standalone AI returned no text.',
           'Standalone AI response exceeds limits.',
+          ANTHROPIC_IMAGE_UNSUPPORTED,
         ].includes(error.message)
       )
         throw error;
@@ -263,6 +324,7 @@ export function createStandaloneAi(
         whisperIntervalSec: 300,
         maxTokens: 32,
         timeoutMs: 15_000,
+        visionEnabled: false,
       };
 
       const controller = new AbortController();

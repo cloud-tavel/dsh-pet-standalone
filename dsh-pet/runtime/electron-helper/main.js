@@ -614,10 +614,81 @@ function bridgeResolve(resp) {
   p.resolve(resp);
 }
 
+/**
+ * 截一张当前屏幕（宿主 /vision-capture 请求的执行体）。
+ *
+ * 只在宿主带对密钥时可达（127.0.0.1 回环 + DSH_PET_CAPTURE_SECRET 头）；
+ * 任何本地进程本来就能 GDI 截屏，这里加密钥是为了不让「随便一个网页触发的本机请求」
+ * 能拿到画面——跨站 POST 拿不到响应体（无 CORS 头），密钥再把伪造请求挡掉。
+ * 画面只作为本次 HTTP 响应返回给宿主，本进程不落盘、不复用、不打日志内容。
+ */
+function handleVisionCapture(req, res) {
+  const secret = process.env.DSH_PET_CAPTURE_SECRET;
+  const supplied = req.headers['x-dsh-pet-capture'];
+  if (!secret || typeof supplied !== 'string' || supplied !== secret) {
+    res.writeHead(403, { 'content-type': 'application/json' });
+    res.end('{"error":"forbidden"}');
+    return;
+  }
+  let done = false;
+  req.on('data', () => {}); // 消费请求体（宿主不发 body，防御性读完）
+  req.on('end', () => {
+    if (done) return;
+    captureScreenJpeg()
+      .then((frame) => {
+        done = true;
+        if (!frame) {
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end('{"jpeg":""}');
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(frame));
+      })
+      .catch((e) => {
+        done = true;
+        console.error('[dsh-pet-desktop-helper] vision capture failed:', String(e && e.message ? e.message : e));
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end('{"jpeg":""}');
+      });
+  });
+  req.on('error', () => {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    res.end('{"jpeg":""}');
+  });
+}
+
+/** desktopCapturer 抓主屏 → 半分辨率 JPEG。返回 {jpeg(base64), bytes, ms}；失败 null。 */
+async function captureScreenJpeg() {
+  const t0 = Date.now();
+  const primary = electronApi.screen.getPrimaryDisplay();
+  const scale = primary.scaleFactor || 1;
+  // 半分辨率（物理像素的一半）：proto-screen 实测 670ms / 体积与识别质量的平衡点
+  const thumbnailSize = {
+    width: Math.max(1, Math.round((primary.size.width * scale) / 2)),
+    height: Math.max(1, Math.round((primary.size.height * scale) / 2)),
+  };
+  const sources = await electronApi.desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
+  const thumb = sources[0] && sources[0].thumbnail;
+  if (!thumb || thumb.isEmpty()) return null;
+  const jpeg = thumb.toJPEG(72);
+  if (!jpeg || jpeg.length === 0) return null;
+  const ms = Date.now() - t0;
+  // 只记尺寸与耗时，不记内容
+  console.error('[dsh-pet-desktop-helper] vision capture ok: ' + jpeg.length + 'B ' + ms + 'ms');
+  return { jpeg: jpeg.toString('base64'), bytes: jpeg.length, ms };
+}
+
 /** 本地回调服务器：宿主把应答 POST 到这里（127.0.0.1 随机端口，绕开 stdin/DSH 闸门） */
 function startBridgeCallback() {
   const http = require('node:http');
   const server = http.createServer((req, res) => {
+    // 宿主主动发起的截屏（「看见屏幕」，宿主侧 vision.ts）：同服务器上的独立端点。
+    // 用 spawn 时注入的 DSH_PET_CAPTURE_SECRET 校验来源（只在本机回环，密钥不落盘不进日志）。
+    if (req.method === 'POST' && req.url === '/vision-capture') {
+      handleVisionCapture(req, res);
+      return;
+    }
     if (req.method !== 'POST' || req.url !== '/respond') {
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('dsh-pet: not found');

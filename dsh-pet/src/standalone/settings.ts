@@ -36,6 +36,7 @@ const settingsSchema = z
     whisperIntervalSec: z.number().int().min(60).max(86400).optional(),
     maxTokens: z.number().int().min(128).max(4096).optional(),
     timeoutMs: z.number().int().min(1000).max(60000).optional(),
+    visionEnabled: z.boolean().optional(),
   })
   .strict();
 
@@ -54,6 +55,7 @@ const publicNames = [
   'whisperIntervalSec',
   'maxTokens',
   'timeoutMs',
+  'visionEnabled',
   'hasKey',
 ] as const;
 export function publicSettings(input: unknown): Record<string, unknown> {

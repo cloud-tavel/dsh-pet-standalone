@@ -10,6 +10,12 @@ export interface StandaloneAiPublicSettings {
   whisperIntervalSec: number;
   maxTokens: number;
   timeoutMs: number;
+  /**
+   * 「看见屏幕」开关（对话时附带当前屏幕截图，见 ./vision.ts）。
+   * 默认**关闭**——这是会向模型服务商外发画面内容的能力，必须用户显式打开
+   * （SCREEN-VISION.md 第 5 节的默认值口径）。
+   */
+  visionEnabled: boolean;
   hasKey: boolean;
 }
 export type StandaloneAiSettings = Omit<StandaloneAiPublicSettings, 'hasKey'> & { apiKey: string };
@@ -23,6 +29,7 @@ export const DEFAULT_AI_SETTINGS: Readonly<StandaloneAiSettings> = Object.freeze
   whisperIntervalSec: 300,
   maxTokens: 1024,
   timeoutMs: 30_000,
+  visionEnabled: false,
   apiKey: '',
 });
 
@@ -61,6 +68,7 @@ const fields = {
   whisperIntervalSec: z.number().int().min(60).max(86400),
   maxTokens: z.number().int().min(128).max(4096),
   timeoutMs: z.number().int().min(1000).max(60_000),
+  visionEnabled: z.boolean(),
   apiKey: z
     .string()
     .max(4096)
@@ -98,8 +106,13 @@ export function createAiConfig(home: string): AiConfigStore {
   let settings: Readonly<StandaloneAiSettings> = DEFAULT_AI_SETTINGS;
   try {
     const loaded = readAiSettings(home);
-    if (loaded !== undefined)
-      settings = Object.freeze(validateSettings(persistedSchema.parse(loaded), DEFAULT_AI_SETTINGS));
+    if (loaded !== undefined) {
+      // 先用默认值补齐再校验：新增字段（如 visionEnabled）不能让旧配置文件在升级时
+      // 被判成「无法安全加载」——用户已保存的密钥因此读不出来属于升级事故。
+      settings = Object.freeze(
+        validateSettings(persistedSchema.parse({ ...DEFAULT_AI_SETTINGS, ...loaded }), DEFAULT_AI_SETTINGS),
+      );
+    }
   } catch {
     throw new Error('Cannot securely load standalone AI settings.');
   }

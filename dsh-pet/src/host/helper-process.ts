@@ -434,6 +434,8 @@ export class HelperProcess {
   declare private renderCompatActive: boolean;
   /** stdout 按行缓冲（协议行按 \n 切分）。用 declare + 构造器赋值，避免类字段降级出外部 helper */
   declare private stdoutBuffer: string;
+  /** 最近一次 bridge 请求携带的回调服务器地址（main.js 每次请求都带；helper 重启后会变） */
+  declare private lastCallbackUrl: string;
 
   constructor(options: HelperOptions = {}, logger: Logger = console) {
     this.options = options;
@@ -445,6 +447,7 @@ export class HelperProcess {
     this.lastStartAt = 0;
     this.stdoutBuffer = '';
     this.renderCompatActive = resolveInitialRenderCompat(resolveRenderCompatMode(), readRenderCompatState());
+    this.lastCallbackUrl = '';
   }
 
   start(): import('node:child_process').ChildProcess | undefined {
@@ -558,6 +561,9 @@ export class HelperProcess {
   private sendBridgeResponse(req: BridgeRequest, resp: BridgeResponse): void {
     const cb = typeof req.cb === 'string' && /^https?:[/][/]/.test(req.cb) ? req.cb : '';
     if (cb) {
+      // 记住最新的回调地址：宿主主动发起的 helper 调用（截屏 RPC）走同一个服务器，
+      // 而 helper 重启后端口会换——只有渲染端的持续请求（/state 轮询）能把它带回来。
+      this.lastCallbackUrl = cb;
       void fetch(cb, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -573,6 +579,39 @@ export class HelperProcess {
       child.stdin.write(BRIDGE_PREFIX + JSON.stringify(resp) + '\n');
     } catch {
       /* ignore */
+    }
+  }
+
+  /**
+   * 宿主主动请求桌面 Helper 截一张屏幕（「看见屏幕」，见 ./vision.ts）。
+   *
+   * 为什么走回调服务器而不是管道：宿主→helper 只有两条路——stdin（Electron 主进程在
+   * Windows 上收不到，electron#4218）与 main.js 的本地回调服务器。渲染端每次 bridge 请求
+   * 都携带 cb 地址，这里复用它 POST 到同服务器的 /vision-capture；main.js 侧用
+   * DSH_PET_CAPTURE_SECRET（spawn 时经环境变量递进去，不落盘）校验来源。
+   *
+   * 失败一律 undefined（调用方降级纯文本）：helper 不在、还没收到过任何 bridge 请求
+   * （cb 未知）、fetch 失败、超时、响应缺 jpeg 字段。
+   *
+   * @returns data URL（image/jpeg;base64,...）或 undefined
+   */
+  async requestCapture(timeoutMs = 3_500): Promise<string | undefined> {
+    const cb = this.lastCallbackUrl;
+    const secret = this.options.env?.DSH_PET_CAPTURE_SECRET;
+    if (!cb || !secret || !this.child) return undefined;
+    const origin = cb.replace(/\/respond\/?$/, '');
+    try {
+      const res = await fetch(`${origin}/vision-capture`, {
+        method: 'POST',
+        headers: { 'x-dsh-pet-capture': secret },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) return undefined;
+      const data = (await res.json()) as { jpeg?: unknown };
+      if (typeof data.jpeg !== 'string' || data.jpeg.length === 0) return undefined;
+      return `data:image/jpeg;base64,${data.jpeg}`;
+    } catch {
+      return undefined;
     }
   }
 
