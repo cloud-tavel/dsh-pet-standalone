@@ -4,21 +4,100 @@
 > 字体走系统栈（预设 id 仍叫 `candy`）。配图**功能代码完整保留**，
 > 你可自行放入拥有版权的图片后恢复。原因与完整清单见仓库根 `NOTICE.md`。
 
-# dsh-pet 🐾
+# dsh-pet 🐾 会陪玩的桌宠
+
+<p align="center">
+  <b>你打游戏，它在旁边看着，关键时刻自己开口说一句。</b><br>
+  <sub>100 段透明动画 · 拖得动甩得飞 · 能看见你的屏幕 · 只在有话说的时候说话</sub>
+</p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-pet"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-pet?label=npm&color=blue"></a>
   <a href="https://www.npmjs.com/package/dsh-pet"><img alt="npm monthly downloads" src="https://img.shields.io/npm/dm/dsh-pet?label=%E6%9C%88%E4%B8%8B%E8%BD%BD&color=brightgreen"></a>
-  <a href="https://www.npmjs.com/package/dsh-pet"><img alt="total downloads" src="https://img.shields.io/npm/dt/dsh-pet?label=%E6%80%BB%E4%B8%8B%E8%BD%BD&color=success"></a>
-  <a href="https://github.com/PC2005-cloud/dsh-pet"><img alt="stars" src="https://img.shields.io/github/stars/PC2005-cloud/dsh-pet?style=social"></a>
-  <a href="https://github.com/PC2005-cloud/dsh-pet/blob/main/LICENSE"><img alt="license" src="https://img.shields.io/github/license/PC2005-cloud/dsh-pet?color=orange"></a>
-  <a href="https://awesome-dsh-plugin.com"><img alt="awesome dsh plugin" src="https://awesome-dsh-plugin.com/badge.svg"></a>
-  <img alt="platform" src="https://img.shields.io/badge/platform-DeepSeek%20Harness%20Web-8A2BE2">
-  <img alt="assets" src="https://img.shields.io/badge/assets-dynamic%20animations-ff69b4">
+  <a href="https://github.com/PC2005-cloud/dsh-pet"><img alt="license" src="https://img.shields.io/badge/license-MIT%20%2B%20%E7%B4%A0%E6%9D%90%E9%9D%9E%E5%95%86%E7%94%A8-orange"></a>
+  <img alt="platform" src="https://img.shields.io/badge/platform-Windows-0078D4">
+  <img alt="assets" src="https://img.shields.io/badge/%E5%8A%A8%E7%94%BB-100%20%E6%AE%B5%20VP9--alpha-ff69b4">
+  <img alt="tests" src="https://img.shields.io/badge/tests-1138%20passing-success">
 </p>
 
-> A floating desktop pet for the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI: idle breathing, random actions (the 97 transparent animations — dozing off, playing with a Rubik's cube, writing code, hotpot…), turns, screen wandering, squash-and-stretch click reactions, throw-and-bounce drag physics, a right-click menu to play any action on demand, balance animations with a thinking bubble, **occasional self-talk and a chat dialog** (both can attach a meme image) — spawn as many pets as you want, live on your **desktop** (transparent always-on-top window), or add **brand-new pet species** (pet pack).
-> 一只住在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 里的桌面宠物：待机呼吸、随机动作（打瞌睡、玩魔方、写代码、吃火锅……97 个透明动画随时无缝衔接）、左右转向、屏幕漫游、点击 Q 弹、拖拽甩抛反弹、右键菜单点播动作、余额动画 + 头顶联想气泡、**时不时的碎碎念与对话**（都能配一张表情包）——可多开同屏，能脱离浏览器住上**桌面**（透明置顶小窗），也能自己添加**全新宠物种类**（pet pack）。
+> **不是「你点它才动」的桌宠，也不是「你问它才答」的助手。**
+> 它在你旁边待着，自己看你玩，觉得有意思就开口——一局打完可能只说两三句，但每句都在点上。
+
+一只 Windows 桌面宠物：**100 段透明动画**无缝衔接，能拖能甩能砸墙，会在屏幕上自己散步；
+**能看见你的游戏画面**（只截前台那一个窗口），画面真变了才开口解说；
+**能念出来**（系统语音，零成本、不联网）。
+
+三种用法：**独立 exe（不装任何东西，双击就跑）** / DSH 插件 / 源码。
+零模型成本起步——不主动打扰你的时候，一次 API 都不调。
+
+---
+
+## 🎮 它怎么陪玩
+
+打开游戏，在设置页勾上「看见屏幕」和「陪玩解说」，然后该干嘛干嘛。
+
+它会按你设的节奏（默认 30 秒）看一眼**当前前台窗口**，算出这帧的画面指纹；跟上一帧差得够多（≥30%）才算「场面变了」，才去问模型；模型觉得没什么可说的就闭嘴，觉得有话说就弹一句在它头顶，同时用系统语音念出来。
+
+**几个刻意的设计**（都是实测之后改的，不是拍脑袋）：
+
+| 设计                           | 为什么                                                                                                                        |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| 30 秒看一眼，不是每帧          | 实测每次抓屏 0.6–1.2 秒（系统截屏的固定开销，与图大小无关）。12 秒一次会让游戏掉帧，30 秒是「看得到变化」和「不碍事」的平衡点 |
+| 采样时只算指纹                 | 判断「变没变」只需要一个 64 位十六进制串，**画面连 helper 进程都不出**                                                        |
+| 变化不到 30% 不打扰            | 走路、转视角、动鼠标都不算「场面变了」                                                                                        |
+| 说完冷却 2 分钟                | 否则一句接一句，立刻变噪音                                                                                                    |
+| 模型选择「不吭声」不算一次解说 | 免得一句正经话没说，冷却却被白白吃掉                                                                                          |
+| 只截前台窗口                   | 桌面、任务栏、别的窗口、桌宠自己，都不在画面里                                                                                |
+
+**实测**（2026-10，Windows 11 / RTX 4060 Laptop / 2560×1440 @1.25）：
+
+| 游戏           | 画面模式    | 结果                                        |
+| -------------- | ----------- | ------------------------------------------- |
+| 崩坏：星穹铁道 | 无边框窗口  | ✅ 能读出「长乐天」「三月七」等具体文字     |
+| 永劫无间       | 全屏（FSO） | ✅ 能读出「宁红夜」「一座幻造城市的拓扑学」 |
+
+两次实测期间 NEAC 反作弊**全程无反应**——它不读游戏内存、不注入 DLL、不模拟键鼠，走的是系统级图形 API（Desktop Duplication / WGC），和录屏软件是同一条路。
+
+> ⚠️ **独占全屏（真 Fullscreen Exclusive）尚未验证**。星铁和永劫走的都是 DWM 合成路径，鸣潮这类可能用真独占的游戏，有可能只拿到黑帧。
+
+## 🔒 它看什么、不看什么
+
+这一节请读完——这是唯一会把屏幕内容发出去的功能，**默认关闭**。
+
+打开之后：
+
+- 只截**前台窗口那块矩形**。桌面图标、任务栏、别的窗口、桌宠自己，都不在画面里
+- 缩到半分辨率 JPEG（实测 40–120KB），传给**你自己配置的模型服务商**
+- **不落盘**：截图只在内存里活一次请求的时间，日志里也不记内容
+- 采样（判断「变没变」）时只算指纹，**画面连 helper 进程都不出**
+- 关掉开关：立即丢弃缓存，下一次请求不会再带图
+
+已知限制（诚实版）：
+
+- **遮挡**：截的是「那块屏幕区域」，如果别的窗口盖在游戏上面，截到的是盖着的东西。已加一层修正（问系统「这个位置最上面是谁」），但只修得好中心点被盖的情况
+- **多屏**：只支持主屏。游戏在副屏时那一次不截，**不会偷偷退回整屏**
+- **独占全屏**：可能黑帧，未验证
+
+成本：一屏图约 384 token。按 DeepSeek 当前计价，1000 张约 **0.17 美元**——30 秒一张、一场两小时的对局约 240 张，合**三毛钱**。
+
+## 📦 装哪个版本
+
+| 你是                    | 装这个            | 说明                                                                            |
+| ----------------------- | ----------------- | ------------------------------------------------------------------------------- |
+| 只想双击就能用          | **独立版（exe）** | 不用装 Node，不用装 DSH。解压后双击 `dsh-pet.exe`，首次在设置页填模型地址与 Key |
+| 已经在用 DSH            | **插件**          | 见下一节，一条命令                                                              |
+| 想改代码 / 想自己造一只 | **源码**          | 见「完整项目」                                                                  |
+
+**独立版怎么用**（第一版）：
+
+1. 解压到任意目录（**不要放 `Program Files`**——它要往自己旁边写配置和日志）
+2. 双击 `dsh-pet.exe`：桌宠落到桌面，托盘出现图标
+3. 打开设置页：**右键桌宠 →「打开网站」**（独立版里这一项打开的就是 AI 设置页，地址带一次性访问令牌，不用记端口）
+4. 设置页填：模型地址（默认 `https://api.deepseek.com`）、模型名（`deepseek-chat`）、API Key
+5. 想让它陪玩：同一页往下勾「看见屏幕」+「陪玩解说」+「语音播报」
+
+> 端口**每次启动随机分配**（不占 3080，避免和你正在跑的 DSH 打架）。想看这次是哪个端口，看 `%USERPROFILE%\.dsh\dsh-pet\logs.txt` 里的 `本机服务 http://127.0.0.1:xxxxx`。
+> 退出：右键托盘图标 →「退出」。
 
 ---
 
@@ -38,7 +117,7 @@ dsh plugin --profile web add dsh-pet
 
 > 💡 想自己造一只专属宠物？克隆 [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet) 仓库，用内置素材链（AI 提示词 → 绿幕视频 → 透明动画，素材由豆包生成）从零生成，全流程可复现。
 
-> 💡 不想每次都开着 DSH？`npx dsh-pet-standalone` 可以**完全不打开 DSH** 让桌宠住在桌面上，见下方「🧍 独立运行（完全不打开 DSH）」。
+> 💡 不想每次都开着 DSH？**独立版**可以完全不打开 DSH 让桌宠住在桌面上——第一版直接给 exe（见上面「📦 装哪个版本」），也可以 `npx dsh-pet-standalone` 或从源码跑，详见「🧍 独立运行（完全不打开 DSH）」。
 
 ### 安装后你会看到什么
 
@@ -52,6 +131,8 @@ dsh plugin --profile web add dsh-pet
 > 已经装过 Electron（或设了 `DSH_PET_ELECTRON_PATH`）时第 2 步会跳过，桌面端几乎立刻出现；下载失败**只影响桌面模式**，浏览器里的宠物不受影响。探测顺序、手动触发与镜像/版本环境变量见下方「🪟 桌面模式（脱离浏览器，可选）」。
 
 ## 🖥️ macOS 使用 mov（Safari 透明播放）
+
+> 本发行版**只发 Windows**，也没有随包发布 `.mov` 素材。这一节留给自行编译 / 想在 mac 上跑的人。
 
 macOS 的 Safari/WKWebView 不认 webm 的 alpha 通道（会渲染黑底），需要用 `.mov`（HEVC-with-Alpha）。客户端会**自动识别 macOS Safari** 并优先请求 `.mov`，所以只需两步：
 
@@ -74,6 +155,9 @@ macOS 的 Safari/WKWebView 不认 webm 的 alpha 通道（会渲染黑底），�
 - **物理参数化（0.2.5）**：拖拽抛掷手感全部由配置 `physics` 段驱动——重力（`gravity`，**0 = 无重力漂浮**）/ 碰壁恢复系数（`restitution`）/ 地面摩擦（`groundFriction`，0 = 冰面）/ 顶部反弹开关（`ceilingBounce`）/ 总力度（`throwPower`）/ 多宠物碰撞开关（`petCollision`），所有宠物共用（**全局默认**：设置页改一次对含 pet pack 的全部宠物生效；种类文件顶层可覆盖，见配置节）；**设置页「物理」区可图形化编辑**（6 个控件，与四个全局开关同一套语义：改完点「保存」整包写入用户配置，非法值就地红字提示、宿主也会拒绝）
 - **点击积分（0.2.5）**：飞行中的宠物被**按下**（速度 ≥ 400px/s）→ 点击处爆开粒子 + 弹出积分卡片；分数 = 速度/100 × 462/大小（线性，越快/越小分越高——小宠物目标小、更难命中，奖励更高）；静止/慢速点击维持普通点击回应动画（`prefers-reduced-motion` 时跳过粒子）
 - **多宠物碰撞（0.2.5）**：`petCollision: true` 开启后，飞行中的宠物撞到其它宠物按**动量守恒 + 恢复系数 0.995** 弹开（质量 ∝ size²，被撞方从落点以新初速抛出去），浏览器与桌面跨窗口同语义（默认关闭）
+- **🎮 陪玩解说（默认关闭）**：你玩游戏，它自己看、自己在关键时刻开口——每 30 秒采一帧，画面变化 ≥30% 才算「换场面」，说完冷却 2 分钟；模型判断没什么可说时保持沉默，**且不消耗冷却**。不念屏幕（不会跟你说「画面里有血条和敌人」），只说你此刻该在意的事。实测星铁与永劫无间都能读出画面里的具体文字，详见「🎮 它怎么陪玩」
+- **👁 看见屏幕（默认关闭）**：对话时可把当前**前台窗口**的截图一起发给模型——它看着你的画面说话，不是瞎猜。只截前台窗口那块矩形，桌面、任务栏、别的窗口都不进画面；采样判断「变没变」时只算 64 位指纹，**画面连 helper 进程都不出**。详见「🔒 它看什么、不看什么」
+- **🔊 语音播报（默认关闭）**：说的同时念出来。默认用 Windows 自带语音合成——不联网、不花钱、100ms 出声；也可切到自建本地 TTS 服务（`POST /say` 或 `GET /tts`），任何一步失败自动回退系统语音，不会突然变哑巴
 - **碎碎念**：宠物时不时自己冒一句——按 `eventsRefreshSec.whisper` 周期（默认 300 秒）调用当前会话所用的模型生成（人设 = **该宠物自己的** `whisperPrompt`，没写就回落到所属条目的那份；另追加一句名字声明与时间背景），气泡展示 10 秒；右键菜单「碎碎念」可立即催一句（绕过节流，同一实例的多端一起看到）。**默认开启**，按宠物可关（`pets[].whisperEnabled`）
 - **对话**：右键「对话」弹窗跟宠物聊天，也能用 `/chat <消息>` 命令（留空 = 催一句碎碎念）——记忆持久化在 `$DSH_HOME/dsh-pet/memory.json`（**全存不删**，每次请求只带最近 `chatMemoryRounds` 轮），浏览器与桌面共享同一份记忆；对话目标为 `/pet` 选中的那只，未选则取列表第一只
 - **表情包配图（0.2.9）**：气泡可以带一张表情包——碎碎念**随机抽 1 张**（`whisperImageEnabled`：只是把这张图的描述加进同一次请求，约 +100 字符 / ≈60 token，增量可忽略）；对话把**整张清单**交给模型按语境选（`chatImageEnabled`：每条消息约 +1.1k 字符 / ≈650 token，约碎碎念配图的 11 倍，随图片数量线性增长）。图片与描述的映射在 `memes`（键 = 表情包目录里的 `<键>.png`；素材归属与动画同一套，见「高级自定义」），两个开关默认都开
@@ -121,11 +205,13 @@ dsh-pet-standalone --port 3100
 npm run build && npm run standalone   # 仓库里（先构建）
 ```
 
-- **能用**：动画链、点击/拖拽/甩抛、右键菜单、多开、自定义动画与表情包、pet pack。
-- **不可用**：余额、碎碎念、对话、系统通知——返回带 `reason` 的结构化失败，不假装成功。
-- **配置**：与 DSH 同一份（`$DSH_HOME/dsh-pet/main-config.jsonc` → 包内默认）。
+- **能用**：动画链、点击/拖拽/甩抛、右键菜单、多开、自定义动画、pet pack，以及**碎碎念、对话、余额、系统通知、看见屏幕、陪玩解说、语音播报**——这些原先只有 DSH 宿主能给，现在独立模式自己实现了一份。
+- **不可用**：`/pet` `/chat` `/balance` 斜杠命令（那是 DSH 输入框的入口）、浏览器 overlay（独立模式只有桌面窗）。
+- **设置页**：`http://127.0.0.1:3080/standalone-ai/` —— 模型连接、定时碎碎念、看见屏幕、陪玩解说、语音播报，全在这一页。
+- **AI 配置**：`$DSH_HOME/standalone-ai.json`（不含明文 Key）；`$DSH_HOME/dsh-pet/main-config.jsonc` 仍是宠物本体配置（位置、大小、物理、动画）。
 - **只显示 `display` 含 `desktop`/`both` 的实例**；端口默认 3080；`Ctrl+C` 或 `POST /shutdown` 退出。
 - **与 DSH 内运行可同时开**，但共用 `%APPDATA%\dsh-pet-electron-helper`，可能互相踩缓存（仅告警）。
+- **多开**：端口被占会自动顺延到下一个，**不是单实例锁**——双击两次会起两个完整实例（两份采样计时器、两份 AI 调用）。
 
 ## ⌨️ 斜杠命令
 
@@ -245,6 +331,10 @@ $DSH_HOME/dsh-pet/pet/
 
 ## 🗑️ 卸载
 
+**独立版（exe）**：删掉解压出来的整个目录就行——不写注册表、不装服务、不加开机自启。用户数据在 `$DSH_HOME/`（默认 `%USERPROFILE%\.dsh\`）下，想彻底清干净就连同 `dsh-pet\`、`standalone-ai.json`、`standalone-runtime.json` 一起删。
+
+**插件版**：
+
 ```sh
 # dsh web：--profile 填 web
 dsh plugin --profile web remove dsh-pet
@@ -288,6 +378,30 @@ dsh plugin --profile web remove dsh-pet
 
 全部动画见仓库：`dsh-pet/assets/webm/`（VP9-alpha，包内唯一发布的格式）。macOS 的 HEVC-alpha `.mov` 单独发布在 [assets-mov](https://github.com/PC2005-cloud/dsh-pet/releases/tag/assets-mov)，按「🖥️ macOS 使用 mov」两步放好即自动生效。
 
+## 🛠 自己打包
+
+```sh
+npm ci
+npm run build          # tsdown 出 lib/ + 生成类型 + 收敛 package.json 的 files
+node scripts/dist.mjs  # 出 dist-app\win-unpacked\（只出解包目录，不做 NSIS）
+```
+
+产物约 **404MB**（Electron 本体 225MB + `app.asar` 58MB，其中动画素材占 53MB），压成 zip 大约 150–180MB。启动 2–3 秒。
+
+三个必须知道的坑（都是这次踩出来的）：
+
+1. **Electron 必须 28+**。`lib/app.js` 是 ESM 且用了顶层 await；Electron 24 会**静默卡死**——不报错、无窗口、进程稳定占 39MB 不动。`electron-builder.yml` 里 `electronVersion: 43.3.0` 与 `scripts/dist.mjs` 传入的 `electronDist` **必须指向同一个版本**，electron-builder 不会替你校验这件事。
+2. **测 exe 前先清掉 `ELECTRON_RUN_AS_NODE`**。这个变量存在时（部分 Node/Electron 工具链会设），exe 会退化成纯 Node 进程，表现就是「双击没反应」。判断方法：`./dsh-pet.exe --version` 正常应打印 `v43.3.0`；若打印 `v24.x`（那是内置 Node 的版本号），就是被污染了，用 `env -u ELECTRON_RUN_AS_NODE ./dsh-pet.exe` 再试。
+3. **`npm run build` 偶发在生成类型那步失败**（`[prepare] 类型声明生成失败`）。原因是 `tsc` 与刚写完 `lib/` 的 tsdown 抢文件句柄，重跑一次即可；`lib/` 里的 JS 产物本身是全的。
+
+验证产物是否真能跑，别只看进程在不在：
+
+```sh
+curl http://127.0.0.1:<端口>/health   # 应返回 name=dsh-pet-app、pets 清单
+```
+
+端口在 `%USERPROFILE%\.dsh\dsh-pet\logs.txt` 的 `本机服务 http://127.0.0.1:xxxxx` 那行。
+
 ## 📚 完整项目（不止是插件）
 
 这是**完整的三件套项目**，任何人 clone 仓库都可以从零生成自己的桌面宠物：
@@ -299,6 +413,39 @@ AI 生成动画的配方     源视频 → 透明动画的管线    运行在 DS
 
 - 仓库：[PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)
 - 素材生成提示词：[prompts/](https://github.com/PC2005-cloud/dsh-pet/tree/main/prompts)（10 秒动作提示词 + 系统通知图标提示词，可直接喂给豆包）
+
+## ⚠️ 第一版的已知问题
+
+写在这里，不藏着：
+
+| 问题                                  | 影响                                                                         | 现状                                               |
+| ------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------- |
+| **独占全屏可能黑帧**                  | 少数用真 Fullscreen Exclusive 的游戏，截到的是黑屏                           | 星铁（无边框）、永劫（FSO）都正常；鸣潮未验证      |
+| **CLI 独立模式右键「显示位置」失效**  | `node lib/standalone.js` 起的服务里，这个菜单点了没反应（POST 缺令牌被 403） | exe 版走单进程自带鉴权，**不受影响**；CLI 模式待修 |
+| **多开不设防**                        | 双击两次 exe 会起两个实例（各自的采样计时器、各自的 API 调用）               | 端口会自动顺延所以不会崩，但不是单实例锁           |
+| **只支持主屏**                        | 游戏在副屏时那一次不截（**不会**偷偷退回整屏）                               | 会跳过这一拍，不报错                               |
+| **本地 TTS 引擎没有能直接对上的服务** | 设置页可以选「本地 TTS 服务」，但要自己按 `tools/tts-local/server.py` 起服务 | 系统语音这条主路径一直可用                         |
+| **只发 Windows**                      | macOS / Linux 没有安装包                                                     | 源码层面支持，未打包未验证                         |
+
+## 🆚 和别的桌宠项目比
+
+「AI 桌宠」这个赛道已经很挤了。2026 年 10 月把 GitHub 上叫得出名字的都看了一遍：
+
+| 项目                                               | ★    | 它是什么                                                      | 和本项目的差别                                                                                  |
+| -------------------------------------------------- | ---- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| [OpenPets](https://github.com/OpenPetsHQ/openpets) | 1.3k | 桌宠插件平台，给 Claude Code / Cursor 这类 agent 当可视化配角 | AI 是**被 agent 驱动**的（agent 让它动它才动），不看屏幕、不陪玩；强在插件 SDK 与沙箱           |
+| [xiaokeai](https://github.com/liupig/xiaokeai)     | 233  | 3D 伴侣（VRM/MMD），语音、口型、跳舞                          | 不截屏、不陪玩；强在 3D 表现                                                                    |
+| [Miru](https://github.com/kiyotakali/Miru)         | 187  | 长期记忆 + 主动陪伴                                           | 不看屏幕、不陪玩；强在记忆与跨设备同步                                                          |
+| [Live2DPet](https://github.com/x380kkm/Live2DPet)  | 90   | Live2D 桌宠 + VOICEVOX 日语音色                               | 不看屏幕；强在 Live2D 模型生态                                                                  |
+| [dsh-game-pet](https://github.com/bigk5780/dsh)    | —    | 同属 DSH 生态，同样「自动截屏 → 出建议」                      | **思路最接近的一个**。10 段动画、无完整桌宠交互（无物理拖拽/漫游/pet pack）、2026-10 之后未更新 |
+| **本项目**                                         | —    | **100 段动画的真桌宠 + 看前台窗口 + 主动陪玩 + 语音**         | —                                                                                               |
+
+说白了：通用 AI 桌宠已经不缺，缺的是**「它主动看你玩，而且真的有话说」**这一件。这也是第一版只押这一个点的原因。
+
+两句诚实的话：
+
+- 上面几个项目的**完成度、跨平台、社区**大概率比本项目好——本项目目前只支持 Windows，且刚刚准备第一次发版。
+- 「陪玩」没有成熟参照，**好不好用取决于模型能不能看懂你这款游戏**。星铁、永劫实测可用；冷门游戏它可能说得像个外行。
 
 ## 🔎 发现更多 DSH 插件
 
