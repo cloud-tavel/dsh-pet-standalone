@@ -26,14 +26,17 @@ export const settingsPage = `<!doctype html>
 </fieldset>
 <fieldset><legend>看见屏幕（实验）</legend>
 <label class="check"><input id="visionEnabled" type="checkbox" aria-describedby="vision-note">对话时让桌宠看一眼当前屏幕</label>
-<p id="vision-note" class="notice">开启后，每次「对话」会把当前屏幕的截图（约半分辨率 JPEG，不落盘、不进对话记忆）与你的消息一起发送给你配置的模型服务商，用于理解画面；碎碎念不带图。需要支持视觉的模型（如 deepseek-flash），且仅限 OpenAI 兼容协议。默认关闭。</p>
+<p id="vision-note" class="notice">开启后，每次「对话」会把当前画面的截图（约半分辨率 JPEG，不落盘、不进对话记忆）与你的消息一起发送给你配置的模型服务商，用于理解画面；碎碎念不带图。需要支持视觉的模型（如 deepseek-flash），且仅限 OpenAI 兼容协议。默认关闭。</p>
+<label for="visionTarget">截屏范围</label>
+<select id="visionTarget"><option value="foreground">只截前台窗口（推荐）</option><option value="screen">整屏</option></select>
+<p class="hint">「只截前台窗口」只保留你正在用的那个窗口那块区域，桌面、别的窗口、任务栏都不在画面里；整屏会把它们一起带上。前台窗口不在主显示器上、或当时没有可用窗口时，这一次就不截（不会退回整屏）。</p>
 </fieldset>
 <fieldset><legend>陪玩解说（观战）</legend>
 <label class="check"><input id="companionEnabled" type="checkbox" aria-describedby="companion-note">打游戏时，让桌宠在旁边看着主动说一句</label>
 <p id="companion-note" class="notice">开启后，桌宠会<b>每隔一段时间</b>取一次屏幕的极简指纹（64×36 缩略图，仅在桌宠进程内算成 16 位哈希，画面本身不外发）来判断画面有没有大变化；只有判定为「换了场面」时才会截全图并发给你配置的模型，让它说一句。90 秒内最多说一次，模型认为没什么可说时会保持沉默。<b>这会持续采样屏幕，默认关闭。</b></p>
 <div class="pair"><div><label for="companionIntervalSec">采样间隔（秒）</label><input id="companionIntervalSec" type="number" min="10" max="600" step="1" value="30" required></div>
 <div><label for="ttsVoice">音色</label><select id="ttsVoice"><option value="">自动（优先中文）</option></select></div></div>
-<p class="hint">间隔至少 10 秒，默认 30 秒。<b>实测每次采样约 0.6–1.2 秒</b>（系统截屏的固定开销，与图大小无关），也就是说间隔越小，游戏里每隔这么久就会有一次约 1 秒的抓屏——想要更灵敏就调小，怕影响帧数就调大或关掉。</p>
+<p class="hint">间隔至少 10 秒，默认 30 秒。<b>实测每次采样约 0.6–0.8 秒</b>（系统截屏的固定开销，与图大小无关；第一次采样会多花约 1 秒做准备），也就是说间隔越小，游戏里每隔这么久就会有一次约 1 秒的抓屏——想要更灵敏就调小，怕影响帧数就调大或关掉。</p>
 <label class="check"><input id="ttsEnabled" type="checkbox" aria-describedby="tts-note">语音播报（桌宠说话时念出来）</label>
 <p id="tts-note" class="hint">使用系统自带语音合成，在本机播放，不联网、不额外花钱。第一次可能需要在本页点一下任意位置以解锁浏览器音频权限。</p>
 <div class="pair"><div><label for="ttsRate">语速（0.5–2）</label><input id="ttsRate" type="number" min="0.5" max="2" step="0.1" value="1" required></div>
@@ -78,7 +81,7 @@ export const settingsScript = `
     return response.json();
   }
   function populate(data) {
-    for (const id of ['protocol','baseUrl','model','whisperIntervalSec','maxTokens','companionIntervalSec','ttsRate','ttsVolume']) {
+    for (const id of ['protocol','baseUrl','model','whisperIntervalSec','maxTokens','companionIntervalSec','ttsRate','ttsVolume','visionTarget']) {
       if (data[id] !== undefined) get(id).value = String(data[id]);
     }
     for (const id of ['enabled','automaticWhispers','visionEnabled','companionEnabled','ttsEnabled']) get(id).checked = data[id] === true;
@@ -190,6 +193,7 @@ export const settingsScript = `
       apiKey: get('apiKey').value, clearApiKey: get('clearApiKey').checked,
       enabled: get('enabled').checked, automaticWhispers: get('automaticWhispers').checked,
       visionEnabled: get('visionEnabled').checked,
+      visionTarget: get('visionTarget').value === 'screen' ? 'screen' : 'foreground',
       companionEnabled: get('companionEnabled').checked,
       companionIntervalSec: Number(get('companionIntervalSec').value),
       ttsEnabled: get('ttsEnabled').checked,

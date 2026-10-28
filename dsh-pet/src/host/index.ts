@@ -173,6 +173,7 @@ import {
   ensureElectronDownload,
   hasGraphicalDisplay,
   resolveElectronPath,
+  type CaptureTarget,
 } from './helper-process';
 
 /** 插件行 id（与 cordis.patch.yml 一致） */
@@ -1160,8 +1161,16 @@ export function apply(ctx: any): void {
    * 恒 false → 行为与「功能不存在」一致。DSH_PET_CAPTURE_SECRET 在拉起 Helper 时生成，
    * 只经子进程环境变量传递，不落盘、不进日志。
    */
+  /**
+   * 截屏范围（独立模式 AI 设置 visionTarget，实时读）。
+   * 缺省/取值不认识时一律 'foreground'——范围更收敛的那一档，宁可少截不可多发。
+   */
+  const visionTarget = (): CaptureTarget => {
+    const policy = optionalService('standaloneAi') as { visionTarget?: () => string } | undefined;
+    return policy?.visionTarget?.() === 'screen' ? 'screen' : 'foreground';
+  };
   const screenVision = createVision({
-    capture: () => helper?.requestCapture() ?? Promise.resolve(undefined),
+    capture: () => helper?.requestCapture(undefined, visionTarget()) ?? Promise.resolve(undefined),
     enabled: () => {
       const policy = optionalService('standaloneAi') as { visionEnabled?: () => boolean } | undefined;
       return policy?.visionEnabled?.() === true;
@@ -1186,8 +1195,8 @@ export function apply(ctx: any): void {
       const policy = optionalService('standaloneAi') as { companionEnabled?: () => boolean } | undefined;
       return policy?.companionEnabled?.() === true;
     },
-    probe: () => helper?.requestProbe() ?? Promise.resolve(undefined),
-    capture: () => helper?.requestCapture() ?? Promise.resolve(undefined),
+    probe: () => helper?.requestProbe(undefined, visionTarget()) ?? Promise.resolve(undefined),
+    capture: () => helper?.requestCapture(undefined, visionTarget()) ?? Promise.resolve(undefined),
     generate: async (image) => {
       const petId = resolveActivePetId();
       if (!petId) return undefined;
@@ -1556,7 +1565,12 @@ export function apply(ctx: any): void {
       if (rest === 'vision/prefetch') screenVision.prefetch();
       const visionEnabled =
         (optionalService('standaloneAi') as { visionEnabled?: () => boolean } | undefined)?.visionEnabled?.() === true;
-      return { kind: 'json', status: 200, obj: { enabled: visionEnabled, ...screenVision.state() } };
+      return {
+        kind: 'json',
+        status: 200,
+        // target：这次截的是前台窗口还是整屏——实测「画面里为什么有别的窗口」先看这一项
+        obj: { enabled: visionEnabled, target: visionTarget(), ...screenVision.state() },
+      };
     }
 
     // 陪玩解说（观战）：

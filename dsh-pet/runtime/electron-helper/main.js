@@ -47,7 +47,7 @@ try {
 }
 const { app, BrowserWindow, ipcMain, screen, shell, protocol, Tray, Menu, nativeImage } = electronApi;
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const { readFileSync, writeFileSync } = require('node:fs');
 const fsPromises = require('node:fs/promises');
 // 点击穿透兜底通道的纯判定（不依赖 Electron 的 forward 鼠标钩子；见文件头注释）
@@ -633,11 +633,14 @@ function handleVisionCapture(req, res) {
   // ?probe=1：只回一张 64×36 的指纹（dHash），不传画面。陪玩解说的「关键时刻检测」
   // 靠它做低频采样——每拍只跑一次小图抓取，画面本身不出 helper。
   const probe = /[?&]probe=1(&|$)/.test(req.url || '');
+  // ?target=screen 才截整屏；缺省 foreground（只裁前台窗口）。默认值必须走隐私更收敛的那一档：
+  // 万一有调用方忘了带参数，宁可少截，也不该把整张桌面发出去。
+  const target = /[?&]target=screen(&|$)/.test(req.url || '') ? 'screen' : 'foreground';
   let done = false;
   req.on('data', () => {}); // 消费请求体（宿主不发 body，防御性读完）
   req.on('end', () => {
     if (done) return;
-    captureScreenJpeg(probe ? { probe: true } : undefined)
+    captureScreenJpeg(probe ? { probe: true, target } : { target })
       .then((frame) => {
         done = true;
         if (!frame) {
@@ -661,7 +664,186 @@ function handleVisionCapture(req, res) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// 前台窗口定位（「只截前台窗口」）
+// ---------------------------------------------------------------------------
+
+/**
+ * 为什么不直接用 desktopCapturer 的 window 源：它只能**枚举全部窗口**，而枚举时会对每个
+ * source 各启一次 WGC 会话——实测 11 个窗口 3.85s，单屏整屏只要 0.67s（proto-screen/
+ * probe-fgwindow.json）。每 30 秒采样一次卡 4 秒是不可接受的，所以改成
+ * **整屏抓一帧 + 按前台窗口矩形裁剪**：画面里只剩前台窗口那块区域，桌面/别的窗口/任务栏
+ * 都不在图上，抓帧成本维持原样（只多一次 ~0.37s 的 Win32 查询，且带 1 秒缓存）。
+ *
+ * 查询用 PowerShell 内联 P/Invoke（Electron 主进程没有 Win32 绑定，也不想为一个 HWND 引
+ * 原生模块）。脚本走 -EncodedCommand（UTF-16LE base64），不写临时文件、不受执行策略影响。
+ * 只读三个数：前台 HWND、PID、窗口矩形。画面仍然只经 desktopCapturer 取，本脚本不截图。
+ */
+const FG_QUERY_SCRIPT = String.raw`
+$ErrorActionPreference='Stop'
+# Add-Type 首次编译会往 progress 流写「正在准备首次使用模块」，它走 stderr，
+# 宿主会当成一条 warn 记进日志（还是 CLIXML 乱码）。这里静音掉。
+$ProgressPreference='SilentlyContinue'
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public class DshFgWin {
+  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint flags);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  static bool Usable(IntPtr h, int selfPid) {
+    if (h == IntPtr.Zero || !IsWindow(h) || !IsWindowVisible(h) || IsIconic(h)) return false;
+    int pid;
+    GetWindowThreadProcessId(h, out pid);
+    if (pid == selfPid) return false;
+    RECT r;
+    if (!GetWindowRect(h, out r)) return false;
+    return (r.Right - r.Left) >= 64 && (r.Bottom - r.Top) >= 64;
+  }
+  static string Fmt(IntPtr h) {
+    RECT r;
+    if (!GetWindowRect(h, out r)) return "none";
+    StringBuilder sb = new StringBuilder(512);
+    GetWindowTextW(h, sb, 512);
+    int pid;
+    GetWindowThreadProcessId(h, out pid);
+    string t = sb.ToString().Replace("\r", " ").Replace("\n", " ");
+    return h.ToInt64() + "|" + pid + "|" + r.Left + "|" + r.Top + "|" + r.Right + "|" + r.Bottom + "|" + t;
+  }
+  public static string Query(Int64 fallback, Int64 selfPid) {
+    SetProcessDPIAware();
+    int self = (int)selfPid;
+    IntPtr target = IntPtr.Zero;
+    IntPtr fg = GetForegroundWindow();
+    if (Usable(fg, self)) target = fg;
+    if (target == IntPtr.Zero && fallback != 0) {
+      IntPtr f = new IntPtr(fallback);
+      if (Usable(f, self)) target = f;
+    }
+    if (target == IntPtr.Zero) return "none";
+    // 遮挡修正：焦点窗口不一定真的在用户眼前——置顶窗口、被浏览器盖住的模拟器窗口
+    // 都能是「前台窗口」，照它的矩形裁出来会是盖在上面的那个窗口的内容（实测踩过）。
+    // 拿窗口中心点问 WindowFromPoint：谁盖在那儿就截谁，那才是用户实际看到的东西。
+    RECT r;
+    GetWindowRect(target, out r);
+    POINT c;
+    c.X = (r.Left + r.Right) / 2;
+    c.Y = (r.Top + r.Bottom) / 2;
+    IntPtr top = GetAncestor(WindowFromPoint(c), 2);
+    if (top != IntPtr.Zero && top != target && Usable(top, self)) target = top;
+    return Fmt(target);
+  }
+}
+'@
+$fb = 0
+try { $fb = [Int64]$env:DSH_PET_FG_FALLBACK } catch { $fb = 0 }
+$self = 0
+try { $self = [Int64]$env:DSH_PET_SELF_PID } catch { $self = 0 }
+[Console]::Out.Write([DshFgWin]::Query($fb, $self))
+`;
+
+/** 前台窗口几何缓存时长：一次对话里 probe 与 capture 会连着来，没必要查两遍 Win32 */
+const FG_TTL_MS = 1_000;
+
+let fgCache;
+/**
+ * 「上一个外部窗口」：用户点桌宠问话时前台会变成桌宠自己（PID 相同），这时不该截自己的窗口
+ * （画面里只有宠物 HUD，模型说什么都是在瞎猜），退回他刚才在看的那个窗口。
+ */
+let lastExternalHwnd = 0;
+/** 只在目标窗口切换时打一行日志，别每 30 秒刷一条 */
+let lastLoggedHwnd = 0;
+
+function parseForeground(text) {
+  const line = String(text || '').trim();
+  if (!line || line === 'none') return undefined;
+  const parts = line.split('|');
+  if (parts.length < 7) return undefined;
+  const hwnd = Number(parts[0]);
+  const pid = Number(parts[1]);
+  const rect = [Number(parts[2]), Number(parts[3]), Number(parts[4]), Number(parts[5])];
+  if (!Number.isFinite(hwnd) || hwnd === 0) return undefined;
+  if (!rect.every((v) => Number.isFinite(v))) return undefined;
+  // 太小的窗口（工具栏、托盘浮窗）不当作「用户在看的东西」
+  if (rect[2] - rect[0] < 64 || rect[3] - rect[1] < 64) return undefined;
+  return { hwnd, pid, rect, title: parts.slice(6).join('|') };
+}
+
+function queryForegroundOnce() {
+  const script = Buffer.from(FG_QUERY_SCRIPT, 'utf16le').toString('base64');
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', script],
+      {
+        timeout: 5000,
+        windowsHide: true,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          DSH_PET_FG_FALLBACK: String(lastExternalHwnd),
+          DSH_PET_SELF_PID: String(process.pid),
+        },
+      },
+      (error, stdout) => {
+        // 异步而不是 execFileSync：同步调用会卡住 Electron 主进程 0.4 秒，桌宠动画跟着一顿
+        if (error) {
+          console.error(
+            '[dsh-pet-desktop-helper] foreground query failed:',
+            String(error && error.message ? error.message : error).split('\n')[0],
+          );
+          resolve(undefined);
+          return;
+        }
+        resolve(parseForeground(stdout));
+      },
+    );
+  });
+}
+
+async function foregroundWindow() {
+  const now = Date.now();
+  if (fgCache && now - fgCache.at < FG_TTL_MS) return fgCache.info;
+  const info = await queryForegroundOnce();
+  fgCache = { at: now, info };
+  if (info) {
+    if (info.pid !== process.pid) lastExternalHwnd = info.hwnd;
+    if (info.hwnd !== lastLoggedHwnd) {
+      lastLoggedHwnd = info.hwnd;
+      // 只记窗口标题（排查「它到底截到了什么」的唯一线索）与尺寸，不记画面内容
+      console.log(
+        '[dsh-pet-desktop-helper] vision target: ' +
+          JSON.stringify(String(info.title || '').slice(0, 60)) +
+          ' ' +
+          (info.rect[2] - info.rect[0]) +
+          'x' +
+          (info.rect[3] - info.rect[1]),
+      );
+    }
+  }
+  return info;
+}
+
 /** desktopCapturer 抓主屏 → 半分辨率 JPEG。返回 {jpeg(base64), bytes, ms}；失败 null。 */
+
+/** 取整并夹到 [min, max]（裁剪矩形的边界处理；越界会让 nativeImage.crop 直接抛错） */
+function clampInt(value, min, max) {
+  const v = Math.round(value);
+  if (!Number.isFinite(v)) return min;
+  return Math.min(max, Math.max(min, v));
+}
+
 /**
  * 从 BGRA 位图算 64 位 dHash（9×8 网格，逐行相邻格比较亮度）。
  * 只用整数运算与一次线性扫描，64×36 的输入在微秒级完成。
@@ -706,39 +888,101 @@ function dhashFromBitmap(bmp, width, height) {
 }
 
 /**
- * 截一张当前屏幕。
- * - 默认（宿主「看见屏幕」对话用）：半分辨率 JPEG，返回 { jpeg, bytes, ms }
- * - probe 模式（陪玩解说的关键时刻检测）：64×36 缩略图 → dHash，返回 { hash, bytes, ms }
+ * 截一张当前画面。
+ * - target=foreground（**默认**）：整屏抓一帧后按前台窗口矩形裁剪——发出去（或算指纹）的
+ *   只有用户正在看的那个窗口，桌面、别的窗口、任务栏都不在画面里。
+ * - target=screen：老的整屏行为（设置页可切回）。
+ * 两种 target 下：
+ * - 常规调用（宿主「看见屏幕」对话用）：半分辨率 JPEG，返回 { jpeg, bytes, ms }
+ * - probe 模式（陪玩解说的关键时刻检测）：缩到 64×36 → dHash，返回 { hash, bytes, ms }
  *   **不返回画面**：采样只用来判断"变没变"，原始像素连 helper 都不出。
+ *
+ * 前台窗口拿不到 / 不在主屏 / 被裁得太小：一律返回 null（这一次不截），**绝不退回整屏**——
+ * 那等于隐私收窄白做。调用方本来就把 null 当「这次看不到」，行为是既有的降级路径。
  */
 async function captureScreenJpeg(opts) {
-  const probe = opts && opts.probe === true;
+  const probe = Boolean(opts && opts.probe === true);
+  const target = opts && opts.target === 'screen' ? 'screen' : 'foreground';
   const t0 = Date.now();
   const primary = electronApi.screen.getPrimaryDisplay();
   const scale = primary.scaleFactor || 1;
-  // 半分辨率（物理像素的一半）：proto-screen 实测 670ms / 体积与识别质量的平衡点
-  const thumbnailSize = probe
-    ? { width: 64, height: 36 }
-    : {
-        width: Math.max(1, Math.round((primary.size.width * scale) / 2)),
-        height: Math.max(1, Math.round((primary.size.height * scale) / 2)),
-      };
-  const sources = await electronApi.desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
-  const thumb = sources[0] && sources[0].thumbnail;
-  if (!thumb || thumb.isEmpty()) return null;
+  // 物理像素尺寸：GetWindowRect 在 SetProcessDPIAware 之后给的是物理像素，两边口径要一致
+  const physW = Math.max(1, Math.round(primary.size.width * scale));
+  const physH = Math.max(1, Math.round(primary.size.height * scale));
+  // 整屏抓图尺寸：常规调用用半分辨率（proto-screen 实测 670ms，是体积与识别质量的平衡点）；
+  // probe 只算指纹，用更小一档（480 宽）就够——裁剪后还要缩到 64×36，再大纯属浪费。
+  const shotSize = probe
+    ? { width: 480, height: Math.max(1, Math.round((480 * physH) / physW)) }
+    : { width: Math.max(1, Math.round(physW / 2)), height: Math.max(1, Math.round(physH / 2)) };
+
+  // 查窗口与抓帧并行：两者互不依赖（抓帧只要 shotSize，而 shotSize 只由屏幕尺寸决定）。
+  // 串行的话每次采样要多付一次 PowerShell 的 ~330ms；并行后总耗时取 max，回到整屏时代的水平。
+  const winPromise = target === 'foreground' ? foregroundWindow() : Promise.resolve(undefined);
+  const sourcesPromise = electronApi.desktopCapturer.getSources({ types: ['screen'], thumbnailSize: shotSize });
+  const [win, sources] = await Promise.all([winPromise, sourcesPromise]);
+  if (target === 'foreground' && !win) {
+    // 查询失败或没有可用窗口：这一拍什么都不截（调用方按「没画面」处理）
+    console.log('[dsh-pet-desktop-helper] vision skip: no foreground window');
+    return null;
+  }
+
+  // display_id 匹配比 sources[0] 稳：多屏下顺序不保证
+  const primaryId = String(primary.id);
+  const picked = sources.find((s) => String(s.display_id) === primaryId) || sources[0];
+  let image = picked && picked.thumbnail;
+  if (!image || image.isEmpty()) return null;
+
+  if (win) {
+    const size = image.getSize();
+    const kx = size.width / physW;
+    const ky = size.height / physH;
+    // 主屏原点不一定在 (0,0)（副屏在左/上时是负数），先换算到物理坐标系
+    const originX = Math.round((primary.bounds ? primary.bounds.x : 0) * scale);
+    const originY = Math.round((primary.bounds ? primary.bounds.y : 0) * scale);
+    const x0 = clampInt((win.rect[0] - originX) * kx, 0, size.width);
+    const y0 = clampInt((win.rect[1] - originY) * ky, 0, size.height);
+    const x1 = clampInt((win.rect[2] - originX) * kx, 0, size.width);
+    const y1 = clampInt((win.rect[3] - originY) * ky, 0, size.height);
+    const w = x1 - x0;
+    const h = y1 - y0;
+    if (w < 8 || h < 8) {
+      // 前台窗口在别的显示器上（或整个跑到主屏外）：交集为空，这次不截。
+      // 阈值取 8px 而不是更大：probe 模式的整屏图只有 480 宽（缩放比 ~0.19），
+      // 一个 64px 的小窗口在图上只剩 12px，阈值太大会让「能截」的窗口变成「跳过」。
+      console.log('[dsh-pet-desktop-helper] vision skip: window outside primary display');
+      return null;
+    }
+    image = image.crop({ x: x0, y: y0, width: w, height: h });
+    if (!image || image.isEmpty()) return null;
+  }
+
   if (probe) {
-    const size = thumb.getSize();
-    const bmp = thumb.toBitmap();
-    const hash = dhashFromBitmap(bmp, size.width, size.height);
+    const small = image.resize({ width: 64, height: 36 });
+    const bmp = small.toBitmap();
+    const hash = dhashFromBitmap(bmp, 64, 36);
     if (!hash) return null;
     return { hash, bytes: bmp.length, ms: Date.now() - t0 };
   }
-  const jpeg = thumb.toJPEG(72);
+  const jpeg = image.toJPEG(72);
   if (!jpeg || jpeg.length === 0) return null;
   const ms = Date.now() - t0;
   // 只记尺寸与耗时，不记内容。成功走 console.log（info 级）——这是正常路径，
   // 不该以 warn 出现在日志里；失败那段仍用 console.error（真异常）。
-  console.log('[dsh-pet-desktop-helper] vision capture ok: ' + jpeg.length + 'B ' + ms + 'ms');
+  const out = image.getSize();
+  console.log(
+    '[dsh-pet-desktop-helper] vision capture ok: ' +
+      jpeg.length +
+      'B ' +
+      out.width +
+      'x' +
+      out.height +
+      (win ? ' (window area)' : ' (screen ' + shotSize.width + 'x' + shotSize.height + ')') +
+      ' ' +
+      ms +
+      'ms (' +
+      target +
+      ')',
+  );
   return { jpeg: jpeg.toString('base64'), bytes: jpeg.length, ms };
 }
 

@@ -496,3 +496,27 @@ test('settings saved before visionEnabled existed still load (upgrade compatibil
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test('visionTarget 默认只截前台窗口，旧配置升级后也补上这个默认值', async () => {
+  const { writeAiSettings } = await import('./ai-storage.ts');
+  const { createAiConfig, DEFAULT_AI_SETTINGS } = await import('./ai-config.ts');
+  const home = mkdtempSync(join(tmpdir(), 'pet-ai-'));
+  try {
+    // 默认值必须落在更收敛的那一档：截屏是唯一把画面外发的路径
+    assert.equal(DEFAULT_AI_SETTINGS.visionTarget, 'foreground');
+    // 旧配置文件里没有 visionTarget（这个字段是后加的）
+    const legacySettings = { ...DEFAULT_AI_SETTINGS } as Record<string, unknown>;
+    delete legacySettings.visionTarget;
+    writeAiSettings(home, legacySettings);
+    const store = createAiConfig(home);
+    assert.equal(store.current().visionTarget, 'foreground');
+    // 显式切整屏能存下来，读回还是整屏
+    void (await store.save({ visionTarget: 'screen' }));
+    assert.equal(store.current().visionTarget, 'screen');
+    // 非法取值被拒，不会把 store 写成乱七八糟的值
+    await assert.rejects(async () => store.save({ visionTarget: 'window' as unknown as 'screen' }));
+    assert.equal(store.current().visionTarget, 'screen');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

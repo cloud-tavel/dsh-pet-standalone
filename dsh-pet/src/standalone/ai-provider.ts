@@ -325,6 +325,7 @@ export function createStandaloneAi(
         maxTokens: 32,
         timeoutMs: 15_000,
         visionEnabled: false,
+        visionTarget: 'foreground' as const,
         // 测试连接不涉及陪玩与语音，给默认值即可（类型要求完整设置对象）
         companionEnabled: false,
         companionIntervalSec: 12,

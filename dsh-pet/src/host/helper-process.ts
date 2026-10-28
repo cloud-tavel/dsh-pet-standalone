@@ -29,6 +29,14 @@ export const defaultHelperMain = resolve(packageRoot, 'runtime', 'electron-helpe
 /** 协议行前缀：stdout/stdin 里以此开头的整行 JSON 属于 bridge 协议，其余为日志 */
 export const BRIDGE_PREFIX = 'dsh-pet-bridge:';
 
+/**
+ * 截屏范围：
+ * - 'foreground'（默认）：只保留前台窗口那块区域（helper 侧整屏抓帧后裁剪）
+ * - 'screen'：整屏
+ * 默认取更收敛的一档——截屏是唯一会把画面外发的能力，调用方漏传时不该扩大范围。
+ */
+export type CaptureTarget = 'foreground' | 'screen';
+
 /** 渲染端（经 main.js 转发）的一次请求：URL 是 /dsh-pet-7340/... 路径 + 查询串；
  *  cb = main.js 本地回调服务器地址（宿主把应答 POST 回去；Electron 主进程读不到 piped stdin，
  *  故应答不走 0 号管道 —— electron#4218） */
@@ -526,7 +534,12 @@ export class HelperProcess {
         void this.handleBridgeLine(trimmed);
         continue;
       }
-      this.logger.debug?.(`[dsh-pet desktop helper] ${trimmed}`);
+      const message = `[dsh-pet desktop helper] ${trimmed}`;
+      // helper 自己的诊断行（统一前缀）走 info：文件日志默认过滤 debug，而「截到了哪个窗口、
+      // 截出来多大」是排查截屏问题的唯一线索，不该被默认级别吞掉。Electron/Chromium 自己的
+      // 噪声（不加这个前缀）仍走 debug，避免刷屏。
+      if (trimmed.startsWith('[dsh-pet-desktop-helper]')) this.logger.info?.(message);
+      else this.logger.debug?.(message);
     }
   }
 
@@ -583,7 +596,7 @@ export class HelperProcess {
   }
 
   /**
-   * 宿主主动请求桌面 Helper 截一张屏幕（「看见屏幕」，见 ./vision.ts）。
+   * 宿主主动请求桌面 Helper 截一张画面（「看见屏幕」，见 ./vision.ts）。
    *
    * 为什么走回调服务器而不是管道：宿主→helper 只有两条路——stdin（Electron 主进程在
    * Windows 上收不到，electron#4218）与 main.js 的本地回调服务器。渲染端每次 bridge 请求
@@ -593,34 +606,39 @@ export class HelperProcess {
    * 失败一律 undefined（调用方降级纯文本）：helper 不在、还没收到过任何 bridge 请求
    * （cb 未知）、fetch 失败、超时、响应缺 jpeg 字段。
    *
+   * @param target 'foreground'（默认）只截前台窗口区域；'screen' 截整屏
    * @returns data URL（image/jpeg;base64,...）或 undefined
    */
-  async requestCapture(timeoutMs = 3_500): Promise<string | undefined> {
-    const data = await this.postCapture('', timeoutMs);
+  async requestCapture(timeoutMs = 3_500, target: CaptureTarget = 'foreground'): Promise<string | undefined> {
+    const data = await this.postCapture('', timeoutMs, target);
     const jpeg = data?.jpeg;
     if (typeof jpeg !== 'string' || jpeg.length === 0) return undefined;
     return `data:image/jpeg;base64,${jpeg}`;
   }
 
   /**
-   * 采一帧**指纹**（不是画面）：helper 侧把屏幕缩到 64×36 后算 dHash，只回 16 进制串。
-   * 陪玩解说的「关键时刻检测」靠它低频判断画面有没有变——原始像素不出 helper，
-   * 也不进宿主内存。helper 不在 / 抓帧失败一律 undefined（调用方跳过这一拍）。
+   * 采一帧**指纹**（不是画面）：helper 侧把（前台窗口那块）画面缩到 64×36 后算 dHash，
+   * 只回 16 进制串。陪玩解说的「关键时刻检测」靠它低频判断画面有没有变——原始像素不出
+   * helper，也不进宿主内存。helper 不在 / 抓帧失败一律 undefined（调用方跳过这一拍）。
    */
-  async requestProbe(timeoutMs = 2_500): Promise<string | undefined> {
-    const data = await this.postCapture('?probe=1', timeoutMs);
+  async requestProbe(timeoutMs = 2_500, target: CaptureTarget = 'foreground'): Promise<string | undefined> {
+    const data = await this.postCapture('&probe=1', timeoutMs, target);
     const hash = data?.hash;
     return typeof hash === 'string' && hash.length > 0 ? hash : undefined;
   }
 
   /** 打一次 helper 的 capture 端点（两个调用方共用同一套鉴权与错误收口） */
-  private async postCapture(query: string, timeoutMs: number): Promise<{ jpeg?: unknown; hash?: unknown } | undefined> {
+  private async postCapture(
+    extraQuery: string,
+    timeoutMs: number,
+    target: CaptureTarget,
+  ): Promise<{ jpeg?: unknown; hash?: unknown } | undefined> {
     const cb = this.lastCallbackUrl;
     const secret = this.options.env?.DSH_PET_CAPTURE_SECRET;
     if (!cb || !secret || !this.child) return undefined;
     const origin = cb.replace(/\/respond\/?$/, '');
     try {
-      const res = await fetch(`${origin}/vision-capture${query}`, {
+      const res = await fetch(`${origin}/vision-capture?target=${target}${extraQuery}`, {
         method: 'POST',
         headers: { 'x-dsh-pet-capture': secret },
         signal: AbortSignal.timeout(timeoutMs),

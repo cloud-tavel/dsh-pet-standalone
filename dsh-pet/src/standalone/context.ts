@@ -97,6 +97,7 @@ export interface StandaloneModelService {
   getSettings(): {
     whisperIntervalSec: number;
     visionEnabled?: boolean;
+    visionTarget?: 'foreground' | 'screen';
     companionEnabled?: boolean;
     companionIntervalSec?: number;
     ttsEnabled?: boolean;
@@ -262,6 +263,8 @@ export function createStandaloneContext(options: StandaloneContextOptions): Stan
             whisperIntervalSec: () => ai.getSettings().whisperIntervalSec,
             // 「看见屏幕」开关（host/vision.ts 每次截屏前实时读，改设置即时生效）
             visionEnabled: () => ai.getSettings().visionEnabled === true,
+            // 截屏范围：foreground（只截前台窗口，默认）/ screen（整屏）
+            visionTarget: () => (ai.getSettings().visionTarget === 'screen' ? 'screen' : 'foreground'),
             // 「陪玩解说」开关与采样间隔（host/companion.ts 每拍实时读，改设置即时生效）
             companionEnabled: () => ai.getSettings().companionEnabled === true,
             companionIntervalSec: () => ai.getSettings().companionIntervalSec,

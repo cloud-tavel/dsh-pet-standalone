@@ -17,6 +17,12 @@ export interface StandaloneAiPublicSettings {
    */
   visionEnabled: boolean;
   /**
+   * 截屏范围：'foreground'（默认）只截前台窗口那块区域；'screen' 截整屏。
+   * 为什么默认不是整屏：整屏抓帧会把桌面、别的窗口（聊天、浏览器、模拟器）一起带上，
+   * 而对话场景里要看的本来就只有用户正在用的那个窗口。
+   */
+  visionTarget: 'foreground' | 'screen';
+  /**
    * 「陪玩解说」开关（观战型：低频采样画面变化，关键时刻主动说一句，见 ../host/companion.ts）。
    * 默认**关闭**——它会在你不问的时候持续采样屏幕，必须用户显式打开。
    * 依赖 visionEnabled 的同一套截屏通道，但两者互不代替：vision 是"你问才看"，这是"你不问也看"。
@@ -46,6 +52,7 @@ export const DEFAULT_AI_SETTINGS: Readonly<StandaloneAiSettings> = Object.freeze
   maxTokens: 1024,
   timeoutMs: 30_000,
   visionEnabled: false,
+  visionTarget: 'foreground',
   companionEnabled: false,
   companionIntervalSec: 30,
   ttsEnabled: false,
@@ -91,6 +98,7 @@ const fields = {
   maxTokens: z.number().int().min(128).max(4096),
   timeoutMs: z.number().int().min(1000).max(60_000),
   visionEnabled: z.boolean(),
+  visionTarget: z.enum(['foreground', 'screen']),
   companionEnabled: z.boolean(),
   companionIntervalSec: z.number().int().min(10).max(600),
   ttsEnabled: z.boolean(),
