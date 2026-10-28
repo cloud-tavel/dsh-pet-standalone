@@ -17,7 +17,7 @@
   <a href="https://github.com/PC2005-cloud/dsh-pet"><img alt="upstream" src="https://img.shields.io/badge/upstream-PC2005--cloud%2Fdsh--pet-8A2BE2"></a>
   <img alt="license" src="https://img.shields.io/badge/license-MIT%20AND%20CC--BY--NC--SA--4.0-orange">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows-0078D4">
-  <img alt="assets" src="https://img.shields.io/badge/%E5%8A%A8%E7%94%BB-100%20%E6%AE%B5%20VP9--alpha-ff69b4">
+  <img alt="assets" src="https://img.shields.io/badge/%E5%8A%A8%E7%94%BB-106%20%E6%AE%B5%20VP9--alpha-ff69b4">
   <img alt="tests" src="https://img.shields.io/badge/tests-1138%20passing-success">
 </p>
 
