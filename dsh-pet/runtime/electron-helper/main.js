@@ -674,8 +674,9 @@ async function captureScreenJpeg() {
   const jpeg = thumb.toJPEG(72);
   if (!jpeg || jpeg.length === 0) return null;
   const ms = Date.now() - t0;
-  // 只记尺寸与耗时，不记内容
-  console.error('[dsh-pet-desktop-helper] vision capture ok: ' + jpeg.length + 'B ' + ms + 'ms');
+  // 只记尺寸与耗时，不记内容。成功走 console.log（info 级）——这是正常路径，
+  // 不该以 warn 出现在日志里；失败那段仍用 console.error（真异常）。
+  console.log('[dsh-pet-desktop-helper] vision capture ok: ' + jpeg.length + 'B ' + ms + 'ms');
   return { jpeg: jpeg.toString('base64'), bytes: jpeg.length, ms };
 }
 

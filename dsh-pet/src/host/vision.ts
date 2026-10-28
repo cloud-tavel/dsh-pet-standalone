@@ -53,7 +53,7 @@ export interface VisionOptions {
   capture: ScreenCapture;
   /** 开关（独立模式 AI 设置的 visionEnabled；DSH 宿主恒 false）。 */
   enabled: () => boolean;
-  logger?: Pick<LoggerLike, 'debug' | 'warn'>;
+  logger?: Pick<LoggerLike, 'info' | 'warn' | 'debug'>;
   now?: () => number;
   ttlMs?: number;
   minIntervalMs?: number;
@@ -103,7 +103,9 @@ export function createVision(options: VisionOptions): StandaloneVision {
       cached = { url, at: now(), bytes };
       lastCaptureAt = now();
       // 只记尺寸与耗时：画面内容（哪怕截到什么敏感东西）不进日志。
-      options.logger?.debug?.(`[dsh-pet] 截屏完成 ${bytes} chars，${elapsed}ms`);
+      // 用 info 而非 debug：文件日志默认过滤 debug，而「这一刻截了多大一张图、花了多久」
+      // 是排查「它为什么说看不到」的唯一线索（图片内容本身永远不落日志）。
+      options.logger?.info?.(`[dsh-pet] 截屏完成 ${bytes} chars，${elapsed}ms`);
       return url;
     });
   };
@@ -151,6 +153,10 @@ export function createVision(options: VisionOptions): StandaloneVision {
       lastCaptureAt = 0;
     },
     state() {
+      // 诊断也是「一次访问」：先走开关检查，关闭状态下查询就把缓存丢掉。
+      // 否则 /vision/state 会在开关关掉后继续报 fresh:true（缓存里那张图其实还在），
+      // 既误导排查，也和「关了就清」的口径冲突。
+      ensureEnabled();
       const ageMs = cached !== undefined ? now() - cached.at : undefined;
       return {
         fresh: ageMs !== undefined && ageMs < ttlMs,

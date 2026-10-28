@@ -62,6 +62,27 @@ test('disabled switch: take/prefetch never capture, cache is wiped (关了就清
   assert.deepEqual(log, ['capture#1', 'capture#2']);
 });
 
+test('turning the switch off makes the very next state() report empty (诊断不许说旧图还在)', async () => {
+  let enabled = true;
+  const log: string[] = [];
+  const vision = createVision({
+    capture: fakeCapture({ log }),
+    enabled: () => enabled,
+    logger: silent,
+    now: () => 1_000_000,
+  });
+  await vision.take();
+  assert.equal(vision.state().fresh, true);
+  enabled = false;
+  // 关键：**只**查状态、不调 take/prefetch —— 也要立刻丢弃缓存
+  const afterOff = vision.state();
+  assert.equal(afterOff.fresh, false);
+  assert.equal(afterOff.bytes, undefined);
+  // 打开后必须重截，不能把关闭期间那张图端出来
+  enabled = true;
+  assert.match((await vision.take()) ?? '', /#2$/);
+});
+
 test('capture failure degrades to undefined and does not throw; concurrent capture is deduped', async () => {
   const vision = createVision({ capture: fakeCapture({ fail: true }), enabled: () => true, logger: silent });
   assert.equal(await vision.take(), undefined);
