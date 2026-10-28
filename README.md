@@ -113,6 +113,8 @@ npm run start:app                # 以独立应用方式启动（无需 DeepSeek
 >
 > 这不影响 `npm run bundle`（tsdown 已通过）与运行——只影响 `.d.ts` 生成。
 > **剥离这 4 个依赖是阶段 3 的任务**，完成前请用上面的 `bundle` + `start:app`。
+> ⚠️ 第一次双击会被 Windows SmartScreen 拦一下（exe 未签名）：点「更多信息」→「仍要运行」。
+> 这不是病毒提示，是「没见过这个发布者」的例行警告。
 
 ---
 
