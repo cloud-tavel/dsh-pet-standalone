@@ -625,16 +625,19 @@ function bridgeResolve(resp) {
 function handleVisionCapture(req, res) {
   const secret = process.env.DSH_PET_CAPTURE_SECRET;
   const supplied = req.headers['x-dsh-pet-capture'];
-  if (!secret || typeof supplied !== 'string' || supplied !== secret) {
+  if (!secret || typeof supplied !== 'string' || !supplied || supplied !== secret) {
     res.writeHead(403, { 'content-type': 'application/json' });
     res.end('{"error":"forbidden"}');
     return;
   }
+  // ?probe=1：只回一张 64×36 的指纹（dHash），不传画面。陪玩解说的「关键时刻检测」
+  // 靠它做低频采样——每拍只跑一次小图抓取，画面本身不出 helper。
+  const probe = /[?&]probe=1(&|$)/.test(req.url || '');
   let done = false;
   req.on('data', () => {}); // 消费请求体（宿主不发 body，防御性读完）
   req.on('end', () => {
     if (done) return;
-    captureScreenJpeg()
+    captureScreenJpeg(probe ? { probe: true } : undefined)
       .then((frame) => {
         done = true;
         if (!frame) {
@@ -659,18 +662,77 @@ function handleVisionCapture(req, res) {
 }
 
 /** desktopCapturer 抓主屏 → 半分辨率 JPEG。返回 {jpeg(base64), bytes, ms}；失败 null。 */
-async function captureScreenJpeg() {
+/**
+ * 从 BGRA 位图算 64 位 dHash（9×8 网格，逐行相邻格比较亮度）。
+ * 只用整数运算与一次线性扫描，64×36 的输入在微秒级完成。
+ * 返回 16 进制字符串（固定 8 或 16 字符，宿主按位比较汉明距离）。
+ */
+function dhashFromBitmap(bmp, width, height) {
+  const GW = 9;
+  const GH = 8;
+  if (!width || !height) return '';
+  const cells = new Float64Array(GW * GH);
+  const counts = new Uint32Array(GW * GH);
+  for (let y = 0; y < height; y += 1) {
+    const cy = Math.min(GH - 1, Math.floor((y * GH) / height));
+    for (let x = 0; x < width; x += 1) {
+      const cx = Math.min(GW - 1, Math.floor((x * GW) / width));
+      const i = (y * width + x) * 4;
+      // BGRA：0.114B + 0.587G + 0.299R
+      const lum = 0.114 * bmp[i] + 0.587 * bmp[i + 1] + 0.299 * bmp[i + 2];
+      const k = cy * GW + cx;
+      cells[k] += lum;
+      counts[k] += 1;
+    }
+  }
+  for (let k = 0; k < cells.length; k += 1) if (counts[k]) cells[k] /= counts[k];
+  let hex = '';
+  let byte = 0;
+  let bits = 0;
+  for (let y = 0; y < GH; y += 1) {
+    for (let x = 0; x < GW - 1; x += 1) {
+      const v = cells[y * GW + x] > cells[y * GW + x + 1] ? 1 : 0;
+      byte = (byte << 1) | v;
+      bits += 1;
+      if (bits === 8) {
+        hex += byte.toString(16).padStart(2, '0');
+        byte = 0;
+        bits = 0;
+      }
+    }
+  }
+  if (bits) hex += (byte << (8 - bits)).toString(16).padStart(2, '0');
+  return hex;
+}
+
+/**
+ * 截一张当前屏幕。
+ * - 默认（宿主「看见屏幕」对话用）：半分辨率 JPEG，返回 { jpeg, bytes, ms }
+ * - probe 模式（陪玩解说的关键时刻检测）：64×36 缩略图 → dHash，返回 { hash, bytes, ms }
+ *   **不返回画面**：采样只用来判断"变没变"，原始像素连 helper 都不出。
+ */
+async function captureScreenJpeg(opts) {
+  const probe = opts && opts.probe === true;
   const t0 = Date.now();
   const primary = electronApi.screen.getPrimaryDisplay();
   const scale = primary.scaleFactor || 1;
   // 半分辨率（物理像素的一半）：proto-screen 实测 670ms / 体积与识别质量的平衡点
-  const thumbnailSize = {
-    width: Math.max(1, Math.round((primary.size.width * scale) / 2)),
-    height: Math.max(1, Math.round((primary.size.height * scale) / 2)),
-  };
+  const thumbnailSize = probe
+    ? { width: 64, height: 36 }
+    : {
+        width: Math.max(1, Math.round((primary.size.width * scale) / 2)),
+        height: Math.max(1, Math.round((primary.size.height * scale) / 2)),
+      };
   const sources = await electronApi.desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
   const thumb = sources[0] && sources[0].thumbnail;
   if (!thumb || thumb.isEmpty()) return null;
+  if (probe) {
+    const size = thumb.getSize();
+    const bmp = thumb.toBitmap();
+    const hash = dhashFromBitmap(bmp, size.width, size.height);
+    if (!hash) return null;
+    return { hash, bytes: bmp.length, ms: Date.now() - t0 };
+  }
   const jpeg = thumb.toJPEG(72);
   if (!jpeg || jpeg.length === 0) return null;
   const ms = Date.now() - t0;
@@ -686,7 +748,9 @@ function startBridgeCallback() {
   const server = http.createServer((req, res) => {
     // 宿主主动发起的截屏（「看见屏幕」，宿主侧 vision.ts）：同服务器上的独立端点。
     // 用 spawn 时注入的 DSH_PET_CAPTURE_SECRET 校验来源（只在本机回环，密钥不落盘不进日志）。
-    if (req.method === 'POST' && req.url === '/vision-capture') {
+    // pathname 比较而不是整串比较：陪玩的指纹采样带 ?probe=1，整串相等会掉进 404 分支
+    // （踩过：probe 一直失败，整图截屏却正常）。
+    if (req.method === 'POST' && String(req.url || '').split('?')[0] === '/vision-capture') {
       handleVisionCapture(req, res);
       return;
     }

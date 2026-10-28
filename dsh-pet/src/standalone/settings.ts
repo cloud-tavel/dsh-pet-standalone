@@ -37,6 +37,12 @@ const settingsSchema = z
     maxTokens: z.number().int().min(128).max(4096).optional(),
     timeoutMs: z.number().int().min(1000).max(60000).optional(),
     visionEnabled: z.boolean().optional(),
+    companionEnabled: z.boolean().optional(),
+    companionIntervalSec: z.number().int().min(10).max(600).optional(),
+    ttsEnabled: z.boolean().optional(),
+    ttsRate: z.number().min(0.5).max(2).optional(),
+    ttsVolume: z.number().min(0).max(1).optional(),
+    ttsVoice: z.string().max(200).optional(),
   })
   .strict();
 
@@ -56,6 +62,12 @@ const publicNames = [
   'maxTokens',
   'timeoutMs',
   'visionEnabled',
+  'companionEnabled',
+  'companionIntervalSec',
+  'ttsEnabled',
+  'ttsRate',
+  'ttsVolume',
+  'ttsVoice',
   'hasKey',
 ] as const;
 export function publicSettings(input: unknown): Record<string, unknown> {

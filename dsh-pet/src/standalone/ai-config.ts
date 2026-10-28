@@ -16,6 +16,22 @@ export interface StandaloneAiPublicSettings {
    * （SCREEN-VISION.md 第 5 节的默认值口径）。
    */
   visionEnabled: boolean;
+  /**
+   * 「陪玩解说」开关（观战型：低频采样画面变化，关键时刻主动说一句，见 ../host/companion.ts）。
+   * 默认**关闭**——它会在你不问的时候持续采样屏幕，必须用户显式打开。
+   * 依赖 visionEnabled 的同一套截屏通道，但两者互不代替：vision 是"你问才看"，这是"你不问也看"。
+   */
+  companionEnabled: boolean;
+  /** 陪玩采样间隔（秒）：越小越灵敏、抓屏越频繁。下限 5 秒（与 companion.ts 的 MIN 对齐）。 */
+  companionIntervalSec: number;
+  /** 语音播报（TTS）：桌宠说话时念出来。默认关闭。 */
+  ttsEnabled: boolean;
+  /** 语速倍率（0.5–2，1 为正常）。 */
+  ttsRate: number;
+  /** 音量（0–1）。 */
+  ttsVolume: number;
+  /** 音色名（浏览器 speechSynthesis 的 voice.name；留空 = 自动挑中文音色）。 */
+  ttsVoice: string;
   hasKey: boolean;
 }
 export type StandaloneAiSettings = Omit<StandaloneAiPublicSettings, 'hasKey'> & { apiKey: string };
@@ -30,6 +46,12 @@ export const DEFAULT_AI_SETTINGS: Readonly<StandaloneAiSettings> = Object.freeze
   maxTokens: 1024,
   timeoutMs: 30_000,
   visionEnabled: false,
+  companionEnabled: false,
+  companionIntervalSec: 30,
+  ttsEnabled: false,
+  ttsRate: 1,
+  ttsVolume: 1,
+  ttsVoice: '',
   apiKey: '',
 });
 
@@ -69,6 +91,15 @@ const fields = {
   maxTokens: z.number().int().min(128).max(4096),
   timeoutMs: z.number().int().min(1000).max(60_000),
   visionEnabled: z.boolean(),
+  companionEnabled: z.boolean(),
+  companionIntervalSec: z.number().int().min(10).max(600),
+  ttsEnabled: z.boolean(),
+  ttsRate: z.number().min(0.5).max(2),
+  ttsVolume: z.number().min(0).max(1),
+  ttsVoice: z
+    .string()
+    .max(200)
+    .refine((s) => !containsControlChar(s)),
   apiKey: z
     .string()
     .max(4096)

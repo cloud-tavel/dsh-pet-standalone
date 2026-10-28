@@ -119,6 +119,7 @@ import { decideAnim } from './anim';
 import { LockStore } from './lock';
 import { createFileLogger, isFileLogger, setDefaultLogger } from './log-file';
 import { createVision } from './vision';
+import { createCompanion, generateCompanion } from './companion';
 import { MENU_WAIT_MAX_MS, MenuRegistry } from './menu';
 import { decidePosition, decideThrow, positionLeafData } from './motion-cue';
 import { parsePlaybackPath, parseWaitQuery, PlaybackStore } from './playback';
@@ -767,6 +768,28 @@ export function apply(ctx: any): void {
   // "生成结果"直接写 S——多端共享同一句由 S 天然保证，不再需要第二份缓存。
   const lastWhisperAt = new Map<string, number>();
 
+  /**
+   * 写「说话」叶子的唯一入口：先按需刷新 `sections.voice`（语音参数），再写 say。
+   *
+   * 为什么把语音参数塞进这里而不是起个定时器盯设置：TTS 参数只在「要说话」这一刻才有意义，
+   * 说话前顺手同步一次就是最准的时机——用户刚在设置页关掉语音，下一句就不会念。
+   * 只在值真的变了时写，避免每句话都多推一次 counter 把长轮询白唤醒。
+   * DSH 宿主没有 standaloneAi 服务 → voice 为 undefined → 完全不写，行为与旧版一致。
+   */
+  let lastVoiceJson = '';
+  const writeSay = (petId: string, data: Record<string, unknown>): void => {
+    const policy = optionalService('standaloneAi') as { voiceSettings?: () => unknown } | undefined;
+    const voice = policy?.voiceSettings?.();
+    if (voice !== undefined) {
+      const json = JSON.stringify(voice);
+      if (json !== lastVoiceJson) {
+        lastVoiceJson = json;
+        state.writeSection('voice', voice);
+      }
+    }
+    state.writePet(petId, 'say', data);
+  };
+
   // 对话记忆文件（唯一读写方 = 本进程；浏览器/桌面两端都只是客户端 → 同一实例天然共享同一份记忆）。
   // 结构双层：{ <种类桶 assetRoot ?? petId>: { <实例 id>: { messages: ChatMemoryMessage[] } } }
   const memoryPath = join(userRoot, 'memory.json');
@@ -876,7 +899,7 @@ export function apply(ctx: any): void {
       // 却在边界被吞掉（API.md 描述的降级 reason 正是它）。
       return result;
     }
-    state.writePet(petId, 'say', result.image ? { text: result.text, image: result.image } : { text: result.text });
+    writeSay(petId, result.image ? { text: result.text, image: result.image } : { text: result.text });
     // 成功也留一行（此前只有失败有日志）：调度拍了、生成也回来了，但「成功」在文件里毫无痕迹，
     // 于是「没触发」与「触发了并且成功」无法区分。
     log.info(
@@ -948,11 +971,7 @@ export function apply(ctx: any): void {
       entry.messages.push({ role: 'assistant', content: generated.text, ts: now });
       await writeMemory(mem);
       // 回复写进 S（与碎碎念同一个叶子：前端本来就是同一条展示链路）
-      state.writePet(
-        petId,
-        'say',
-        generated.image ? { text: generated.text, image: generated.image } : { text: generated.text },
-      );
+      writeSay(petId, generated.image ? { text: generated.text, image: generated.image } : { text: generated.text });
       // 同一份文本随返回值带出（叶子照写，不是二选一）
       return { ok: true as const, text: generated.text, ...(generated.image ? { image: generated.image } : {}) };
     });
@@ -1150,6 +1169,58 @@ export function apply(ctx: any): void {
     logger: log,
   });
   ctx.effect(() => () => screenVision.clear());
+
+  /**
+   * 陪玩解说（观战型）：低频采样屏幕指纹，画面大变化才抓图让模型说一句。
+   *
+   * 三道开销闸（顺序即从便宜到贵）：
+   *  ① 每 sampleIntervalSec 只抓一张 64×36 缩略图在 **helper 内**算 dHash，宿主只收一个指纹；
+   *  ② 指纹距离 < changeThreshold（默认 30%）→ 什么都不做，不截全图、不调模型；
+   *  ③ 通过后还要过 cooldown（默认 90 秒）——两次开口之间至少隔这么久。
+   *
+   * 开关与间隔都从 standaloneAi 实时读，改设置下一拍生效；DSH 宿主没有这个服务 → 恒关，
+   * 连采样都不会发生（enabled 为 false 时 tick 直接跳过）。
+   */
+  const companion = createCompanion({
+    enabled: () => {
+      const policy = optionalService('standaloneAi') as { companionEnabled?: () => boolean } | undefined;
+      return policy?.companionEnabled?.() === true;
+    },
+    probe: () => helper?.requestProbe() ?? Promise.resolve(undefined),
+    capture: () => helper?.requestCapture() ?? Promise.resolve(undefined),
+    generate: async (image) => {
+      const petId = resolveActivePetId();
+      if (!petId) return undefined;
+      const found = findPetInstance(readAllConfig(configPaths), petId);
+      if (!found) return undefined;
+      const result = await generateCompanion(
+        ctx,
+        petSystemPrompt(found),
+        image,
+        configuredModel(found.conf, 'chatModel'),
+      );
+      if (!result.ok) {
+        log.debug?.(`[dsh-pet] 陪玩生成失败：${result.reason}${result.message ? ' ' + result.message : ''}`);
+        return undefined;
+      }
+      // text === undefined 表示模型回了 SILENT（没什么值得说）——上层据此不开口、不推进冷却
+      return result.text;
+    },
+    speak: (text) => {
+      const petId = resolveActivePetId();
+      if (petId) writeSay(petId, { text });
+    },
+    logger: log,
+    sampleIntervalMs: () => {
+      const policy = optionalService('standaloneAi') as { companionIntervalSec?: () => number } | undefined;
+      const sec = policy?.companionIntervalSec?.();
+      return typeof sec === 'number' && Number.isFinite(sec) ? sec * 1000 : undefined;
+    },
+  });
+  ctx.effect(() => {
+    companion.start();
+    return () => companion.stop();
+  });
   /** 「无图形环境」提示只在进程生命周期内打一次，避免守护循环刷屏 */
   let displayWarned = false;
   /** 「无桌面宠物 → 跳过」的 info 只打一次：纯网页用户每次启动都会走这条短路，不该刷屏 */
@@ -1486,6 +1557,26 @@ export function apply(ctx: any): void {
       const visionEnabled =
         (optionalService('standaloneAi') as { visionEnabled?: () => boolean } | undefined)?.visionEnabled?.() === true;
       return { kind: 'json', status: 200, obj: { enabled: visionEnabled, ...screenVision.state() } };
+    }
+
+    // 陪玩解说（观战）：
+    //  - GET  /companion/state —— 诊断：开关、采样/触发/开口计数、上次采样耗时与画面变化率。
+    //    只有计数与耗时，**绝不含画面内容**（画面根本不进宿主）。
+    //  - POST /companion/tick  —— 手动跑一拍采样（实测与排障用；不改变定时链）。
+    //  - POST /companion/say   —— 立刻说一句：跳过变化检测与冷却（想让它现在就说一句时用）。
+    if (rest === 'companion/state' || rest === 'companion/tick' || rest === 'companion/say') {
+      if (rest === 'companion/state' && method !== 'GET') {
+        return { kind: 'json', status: 405, obj: { error: 'method not allowed' } };
+      }
+      if (rest !== 'companion/state' && method !== 'POST') {
+        return { kind: 'json', status: 405, obj: { error: 'method not allowed' } };
+      }
+      if (rest === 'companion/tick') await companion.tick();
+      if (rest === 'companion/say') {
+        const spoke = await companion.say();
+        return { kind: 'json', status: 200, obj: { ok: spoke, ...companion.state() } };
+      }
+      return { kind: 'json', status: 200, obj: companion.state() };
     }
 
     // 单只宠物的显示位置（桌面端右键「关闭桌面显示」→ POST /pet-display）。
@@ -2035,7 +2126,7 @@ export function apply(ctx: any): void {
         // 实际生效的时长与联动开关，调用方不用自己猜缺省是多少。
         // 配图两种形态二选一（判定层保证）：url 形态写 url，名称形态写池内规范名，都没有则纯文本。
         const pic = d.url !== undefined ? { url: d.url } : d.image !== undefined ? { image: d.image } : {};
-        state.writePet(d.petId, 'say', { text: d.text, ...pic, duration: d.duration, anim: d.anim });
+        writeSay(d.petId, { text: d.text, ...pic, duration: d.duration, anim: d.anim });
         return { kind: 'json', status: 200, obj: { ok: true } };
       } catch (e) {
         // 配置读取失败等（安装损坏）→ 显式失败，不静默

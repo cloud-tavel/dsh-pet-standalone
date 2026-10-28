@@ -596,20 +596,37 @@ export class HelperProcess {
    * @returns data URL（image/jpeg;base64,...）或 undefined
    */
   async requestCapture(timeoutMs = 3_500): Promise<string | undefined> {
+    const data = await this.postCapture('', timeoutMs);
+    const jpeg = data?.jpeg;
+    if (typeof jpeg !== 'string' || jpeg.length === 0) return undefined;
+    return `data:image/jpeg;base64,${jpeg}`;
+  }
+
+  /**
+   * 采一帧**指纹**（不是画面）：helper 侧把屏幕缩到 64×36 后算 dHash，只回 16 进制串。
+   * 陪玩解说的「关键时刻检测」靠它低频判断画面有没有变——原始像素不出 helper，
+   * 也不进宿主内存。helper 不在 / 抓帧失败一律 undefined（调用方跳过这一拍）。
+   */
+  async requestProbe(timeoutMs = 2_500): Promise<string | undefined> {
+    const data = await this.postCapture('?probe=1', timeoutMs);
+    const hash = data?.hash;
+    return typeof hash === 'string' && hash.length > 0 ? hash : undefined;
+  }
+
+  /** 打一次 helper 的 capture 端点（两个调用方共用同一套鉴权与错误收口） */
+  private async postCapture(query: string, timeoutMs: number): Promise<{ jpeg?: unknown; hash?: unknown } | undefined> {
     const cb = this.lastCallbackUrl;
     const secret = this.options.env?.DSH_PET_CAPTURE_SECRET;
     if (!cb || !secret || !this.child) return undefined;
     const origin = cb.replace(/\/respond\/?$/, '');
     try {
-      const res = await fetch(`${origin}/vision-capture`, {
+      const res = await fetch(`${origin}/vision-capture${query}`, {
         method: 'POST',
         headers: { 'x-dsh-pet-capture': secret },
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!res.ok) return undefined;
-      const data = (await res.json()) as { jpeg?: unknown };
-      if (typeof data.jpeg !== 'string' || data.jpeg.length === 0) return undefined;
-      return `data:image/jpeg;base64,${data.jpeg}`;
+      return (await res.json()) as { jpeg?: unknown; hash?: unknown };
     } catch {
       return undefined;
     }

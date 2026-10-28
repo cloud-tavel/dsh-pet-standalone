@@ -43,6 +43,7 @@ import {
 } from '../shared/state';
 import { WORK_STATUS_INDEX, type WorkStatusSnapshot } from '../shared/work-status';
 import { makeBalanceBubble, makeWhisperBubble } from './bubble';
+import { setVoiceSettings, speakText } from './tts';
 import { clickScore, SCORE_MIN_SPEED, mountScorePopup, spawnScoreBurst } from '../shared/score-popup';
 import {
   CANVAS_H,
@@ -955,6 +956,9 @@ export function makePetUI(rt: {
       setWhisperImage(image);
       setWhisperUrl(url);
       setWhisperBubbleOn(true);
+      // 语音播报：与气泡同一次触发（开关在 sections.voice，见 client/tts.ts）。
+      // 放在气泡之后——语音失败也只影响声音，气泡已经在了。
+      speakText(text);
       // 气泡定时消失（与动画解耦；重复触发先清旧定时器）
       if (whisperBubbleTimerRef.current !== null) window.clearTimeout(whisperBubbleTimerRef.current);
       whisperBubbleTimerRef.current = window.setTimeout(
@@ -2423,6 +2427,8 @@ export function makePetUI(rt: {
           // 菜单项是**当前状态**不是"事件"，首拉必须装上：否则刷新页面后第三方菜单会一直是空的，
           // 要等下一次注册（写 sections.menu）才出现。
           menuItemsRef.current = readMenuItems(s.sections.menu?.data, 'web');
+          // 语音参数也是「当前状态」不是事件：首拉必须装上，否则第一次说话会是哑的
+          setVoiceSettings(s.sections.voice?.data);
           return;
         }
         for (const { path, leaf } of takeChanged(s, baseline)) {
@@ -2448,6 +2454,10 @@ export function makePetUI(rt: {
           } else if (path === 'sections.menu') {
             // 第三方菜单注册表快照：只更新 ref（菜单在右键那一刻现拼），不触发任何渲染
             menuItemsRef.current = readMenuItems(leaf.data, 'web');
+          } else if (path === 'sections.voice') {
+            // 语音开关/语速/音色被改（设置页保存后宿主写这个叶子）→ 立即生效，
+            // 关掉时会顺手 cancel 掉正在念的那句（见 client/tts.ts）
+            setVoiceSettings(leaf.data);
           } else if (path.startsWith('pets.') && path.endsWith('.say')) {
             // 说话叶子：路径形如 pets.<id>.say。宠物 id **允许含点号**，所以按前缀/后缀切片，
             // 绝不 split('.')（那会把 id 切碎、派发给不存在的宠物）。

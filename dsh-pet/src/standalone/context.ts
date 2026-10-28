@@ -90,8 +90,20 @@ export interface StandaloneModelService {
   stream(options: unknown): AsyncIterable<unknown>;
   isReady(): boolean;
   canWhisper(): boolean;
-  /** 碎碎念周期；visionEnabled 是「看见屏幕」开关（可选：旧测试替身没有该字段 = 关闭）。 */
-  getSettings(): { whisperIntervalSec: number; visionEnabled?: boolean };
+  /**
+   * 碎碎念周期；visionEnabled 是「看见屏幕」开关；companion* / tts* 是陪玩与语音参数。
+   * 全部可选：旧测试替身没有这些字段 = 对应能力关闭（行为与加功能之前一致）。
+   */
+  getSettings(): {
+    whisperIntervalSec: number;
+    visionEnabled?: boolean;
+    companionEnabled?: boolean;
+    companionIntervalSec?: number;
+    ttsEnabled?: boolean;
+    ttsRate?: number;
+    ttsVolume?: number;
+    ttsVoice?: string;
+  };
   /**
    * 余额查询凭据（设置里的 baseUrl + apiKey）。可选：只在真接了 AI 的实现里有，
    * 测试替身可以不给——缺它时余额桥不注册，行为与接 AI 之前一致（unsupported）。
@@ -250,6 +262,19 @@ export function createStandaloneContext(options: StandaloneContextOptions): Stan
             whisperIntervalSec: () => ai.getSettings().whisperIntervalSec,
             // 「看见屏幕」开关（host/vision.ts 每次截屏前实时读，改设置即时生效）
             visionEnabled: () => ai.getSettings().visionEnabled === true,
+            // 「陪玩解说」开关与采样间隔（host/companion.ts 每拍实时读，改设置即时生效）
+            companionEnabled: () => ai.getSettings().companionEnabled === true,
+            companionIntervalSec: () => ai.getSettings().companionIntervalSec,
+            // 语音播报参数（host 写进 S 的 sections.voice，客户端据此念）
+            voiceSettings: () => {
+              const s = ai.getSettings();
+              return {
+                enabled: s.ttsEnabled === true,
+                rate: s.ttsRate,
+                volume: s.ttsVolume,
+                voice: s.ttsVoice,
+              };
+            },
           },
         }
       : {}),

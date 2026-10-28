@@ -16,9 +16,17 @@ import assert from 'node:assert/strict';
 import { MAX_STATE_WAIT_MS, parseStateWaitQuery, PollStateStore } from './state.ts';
 
 describe('PollStateStore —— 初始形态', () => {
-  test('四个全局叶子都是 {counter:0, data:null}（0 = 从未写过，前端首拉当基线）', () => {
+  test('全部全局叶子都是 {counter:0, data:null}（0 = 从未写过，前端首拉当基线）', () => {
     const s = new PollStateStore().read();
-    assert.deepEqual(Object.keys(s.sections).sort(), ['balance', 'config', 'menu', 'notify', 'workStatus']);
+    // voice：陪玩/语音播报参数（设置页保存后由宿主写，客户端首拉装配）
+    assert.deepEqual(Object.keys(s.sections).sort(), [
+      'balance',
+      'config',
+      'menu',
+      'notify',
+      'voice',
+      'workStatus',
+    ]);
     for (const leaf of Object.values(s.sections)) assert.deepEqual(leaf, { counter: 0, data: null });
     assert.deepEqual(s.pets, {});
   });
