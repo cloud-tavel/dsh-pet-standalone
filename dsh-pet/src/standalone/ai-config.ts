@@ -38,6 +38,15 @@ export interface StandaloneAiPublicSettings {
   ttsVolume: number;
   /** 音色名（浏览器 speechSynthesis 的 voice.name；留空 = 自动挑中文音色）。 */
   ttsVoice: string;
+  /**
+   * 语音引擎：'system' = 浏览器自带的系统语音合成（默认，零依赖、零延迟）；
+   * 'local' = 调用本机自建的 TTS 服务（如 IndexTTS，见 tools/tts-local/），音质好，
+   * 但要显存、延迟是秒级。**只在「玩不吃性能的小游戏」时才值得打开**。
+   * 本地服务不可用时客户端自动回退系统语音，不会变成哑巴。
+   */
+  ttsEngine: 'system' | 'local';
+  /** 本地 TTS 服务根地址（ttsEngine='local' 时生效），例如 http://127.0.0.1:7861。 */
+  ttsEndpoint: string;
   hasKey: boolean;
 }
 export type StandaloneAiSettings = Omit<StandaloneAiPublicSettings, 'hasKey'> & { apiKey: string };
@@ -59,6 +68,8 @@ export const DEFAULT_AI_SETTINGS: Readonly<StandaloneAiSettings> = Object.freeze
   ttsRate: 1,
   ttsVolume: 1,
   ttsVoice: '',
+  ttsEngine: 'system',
+  ttsEndpoint: 'http://127.0.0.1:7861',
   apiKey: '',
 });
 
@@ -108,6 +119,9 @@ const fields = {
     .string()
     .max(200)
     .refine((s) => !containsControlChar(s)),
+  ttsEngine: z.enum(['system', 'local']),
+  // 允许为空（不配置 = 让调用方按 bad-endpoint 降级），非空时必须是干净地址
+  ttsEndpoint: z.string().max(2048).refine(safeEndpoint),
   apiKey: z
     .string()
     .max(4096)

@@ -104,6 +104,8 @@ export interface StandaloneModelService {
     ttsRate?: number;
     ttsVolume?: number;
     ttsVoice?: string;
+    ttsEngine?: 'system' | 'local';
+    ttsEndpoint?: string;
   };
   /**
    * 余额查询凭据（设置里的 baseUrl + apiKey）。可选：只在真接了 AI 的实现里有，
@@ -273,11 +275,16 @@ export function createStandaloneContext(options: StandaloneContextOptions): Stan
               const s = ai.getSettings();
               return {
                 enabled: s.ttsEnabled === true,
+                // 引擎随参数一起下发：客户端据此决定「系统语音」还是「向宿主要音频」。
+                // 端点不下发（客户端不该知道服务地址，也不该绕过宿主直接连它）。
+                engine: s.ttsEngine === 'local' ? 'local' : 'system',
                 rate: s.ttsRate,
                 volume: s.ttsVolume,
                 voice: s.ttsVoice,
               };
             },
+            // 本地 TTS 服务地址：只有宿主侧（/voice/say 路由）用得到
+            ttsLocalEndpoint: () => ai.getSettings().ttsEndpoint ?? '',
           },
         }
       : {}),

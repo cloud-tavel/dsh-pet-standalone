@@ -333,6 +333,8 @@ export function createStandaloneAi(
         ttsRate: 1,
         ttsVolume: 1,
         ttsVoice: '',
+        ttsEngine: 'system' as const,
+        ttsEndpoint: '',
       };
 
       const controller = new AbortController();

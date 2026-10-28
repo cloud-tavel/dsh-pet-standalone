@@ -35,4 +35,12 @@ export default tseslint.config(
       'no-undef': 'off',
     },
   },
+  {
+    // tools/ 是独立运行的小服务/脚本（node 直跑，不进构建产物）：Buffer/process 等
+    // 全局由 Node 提供，与 scripts/ 同一口径不做 no-undef 校验，其余规则照常
+    files: ['tools/**/*.{js,mjs,ts}'],
+    rules: {
+      'no-undef': 'off',
+    },
+  },
 );

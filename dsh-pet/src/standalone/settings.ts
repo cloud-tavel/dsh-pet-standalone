@@ -44,6 +44,8 @@ const settingsSchema = z
     ttsRate: z.number().min(0.5).max(2).optional(),
     ttsVolume: z.number().min(0).max(1).optional(),
     ttsVoice: z.string().max(200).optional(),
+    ttsEngine: z.enum(['system', 'local']).optional(),
+    ttsEndpoint: z.string().max(2048).optional(),
   })
   .strict();
 
@@ -70,6 +72,8 @@ const publicNames = [
   'ttsRate',
   'ttsVolume',
   'ttsVoice',
+  'ttsEngine',
+  'ttsEndpoint',
   'hasKey',
 ] as const;
 export function publicSettings(input: unknown): Record<string, unknown> {

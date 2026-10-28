@@ -38,9 +38,16 @@ export const settingsPage = `<!doctype html>
 <div><label for="ttsVoice">音色</label><select id="ttsVoice"><option value="">自动（优先中文）</option></select></div></div>
 <p class="hint">间隔至少 10 秒，默认 30 秒。<b>实测每次采样约 0.6–0.8 秒</b>（系统截屏的固定开销，与图大小无关；第一次采样会多花约 1 秒做准备），也就是说间隔越小，游戏里每隔这么久就会有一次约 1 秒的抓屏——想要更灵敏就调小，怕影响帧数就调大或关掉。</p>
 <label class="check"><input id="ttsEnabled" type="checkbox" aria-describedby="tts-note">语音播报（桌宠说话时念出来）</label>
-<p id="tts-note" class="hint">使用系统自带语音合成，在本机播放，不联网、不额外花钱。第一次可能需要在本页点一下任意位置以解锁浏览器音频权限。</p>
+<p id="tts-note" class="hint">默认用系统自带语音合成，在本机播放，不联网、不额外花钱。第一次可能需要在本页点一下任意位置以解锁浏览器音频权限。</p>
 <div class="pair"><div><label for="ttsRate">语速（0.5–2）</label><input id="ttsRate" type="number" min="0.5" max="2" step="0.1" value="1" required></div>
 <div><label for="ttsVolume">音量（0–1）</label><input id="ttsVolume" type="number" min="0" max="1" step="0.1" value="1" required></div></div>
+<label for="ttsEngine">语音引擎</label>
+<select id="ttsEngine" aria-describedby="tts-engine-note"><option value="system">系统语音合成（默认，零依赖）</option><option value="local">本地 TTS 服务（IndexTTS 等，音质好）</option></select>
+<p id="tts-engine-note" class="hint">「本地服务」会把下面那个地址当成一个自建 TTS 服务：桌宠每说一句就发一次请求拿音频再播。它要占显存、延迟是秒级，<b>建议只在玩不吃性能的小游戏时打开</b>；服务没起、太慢或返回异常都会自动退回系统语音，不会变成哑巴。搭法见项目里的 <code>tools/tts-local/</code>（带一个不用显卡的 mock 服务，可以先拿它验证链路）。</p>
+<label for="ttsEndpoint">本地服务地址</label>
+<input id="ttsEndpoint" type="url" maxlength="2048" placeholder="http://127.0.0.1:7861" spellcheck="false" aria-describedby="tts-endpoint-note">
+<p id="tts-endpoint-note" class="hint">只填根地址，不要带 /say 或查询参数。<b>试听用的是已保存的设置</b>，改完先点保存再试听。</p>
+<div class="test-row"><button id="tts-test-btn" type="button">试听一句</button><span id="tts-test-result" class="test-result" role="status" aria-live="polite"></span></div>
 </fieldset>
 <footer><p id="privacy">所有配置与密钥仅保存在当前机器。<br>关闭 AI 后，桌宠仍可正常显示、移动与互动。</p><button id="save" type="submit" disabled>保存到本机</button></footer>
 <p id="status" role="status" aria-live="polite">正在读取本机设置…</p>
@@ -81,7 +88,7 @@ export const settingsScript = `
     return response.json();
   }
   function populate(data) {
-    for (const id of ['protocol','baseUrl','model','whisperIntervalSec','maxTokens','companionIntervalSec','ttsRate','ttsVolume','visionTarget']) {
+    for (const id of ['protocol','baseUrl','model','whisperIntervalSec','maxTokens','companionIntervalSec','ttsRate','ttsVolume','visionTarget','ttsEngine','ttsEndpoint']) {
       if (data[id] !== undefined) get(id).value = String(data[id]);
     }
     for (const id of ['enabled','automaticWhispers','visionEnabled','companionEnabled','ttsEnabled']) get(id).checked = data[id] === true;
@@ -183,6 +190,55 @@ export const settingsScript = `
       }
     });
   }
+  // ---- 试听本地语音：让「本地服务到底通没通」在设置页就能验证，不必进游戏等它开口 ----
+  // 走宿主 GET /voice/say（只读、不改状态），因此不需要页面凭据；用的是**已保存**的设置。
+  const ttsTestBtn = get('tts-test-btn');
+  const ttsTestResult = get('tts-test-result');
+  const ttsReasons = {
+    disabled: '语音播报没开：勾上「语音播报」并保存',
+    'engine-system': '引擎还是「系统语音」：切到「本地 TTS 服务」并保存',
+    'bad-endpoint': '服务地址为空或不合法',
+    timeout: '服务 20 秒内没响应（模型可能还在加载）',
+    network: '连不上服务，确认它已经在跑',
+    'not-audio': '服务返回的不是音频',
+    'empty-audio': '服务返回了空音频',
+    'too-large': '返回的音频太大，可能是配置错了地址',
+    'text-too-long': '这句话太长',
+  };
+  const ttsReasonText = reason => ttsReasons[reason] || '失败：' + reason;
+  if (ttsTestBtn && ttsTestResult) {
+    ttsTestBtn.addEventListener('click', async () => {
+      ttsTestBtn.disabled = true;
+      ttsTestResult.className = 'test-result';
+      ttsTestResult.textContent = '正在合成…（本地模型可能要几秒）';
+      try {
+        const text = '试听：这是一句本地语音合成，听到就说明服务通了。';
+        const speed = Number(get('ttsRate').value) || 1;
+        const response = await fetch('/dsh-pet-7340/voice/say?text=' + encodeURIComponent(text) + '&speed=' + encodeURIComponent(String(speed)), { cache: 'no-store' });
+        const data = await response.json();
+        if (!data.ok) {
+          ttsTestResult.className = 'test-result test-error';
+          ttsTestResult.textContent = '✗ ' + ttsReasonText(String(data.reason));
+          return;
+        }
+        if (typeof Audio === 'undefined') {
+          ttsTestResult.className = 'test-result test-error';
+          ttsTestResult.textContent = '✗ 当前环境不支持播放音频';
+          return;
+        }
+        const audio = new Audio(data.audio);
+        audio.volume = Number(get('ttsVolume').value) || 1;
+        await audio.play();
+        ttsTestResult.className = 'test-result test-success';
+        ttsTestResult.textContent = '✓ 已播放（合成 ' + Math.round(Number(data.ms || 0) / 100) / 10 + ' 秒）';
+      } catch (error) {
+        ttsTestResult.className = 'test-result test-error';
+        ttsTestResult.textContent = '✗ 请求异常：' + (error && error.message ? error.message : String(error));
+      } finally {
+        ttsTestBtn.disabled = false;
+      }
+    });
+  }
   form.addEventListener('submit', async event => {
     event.preventDefault();
     if (!form.reportValidity()) return;
@@ -199,6 +255,8 @@ export const settingsScript = `
       ttsEnabled: get('ttsEnabled').checked,
       ttsRate: Number(get('ttsRate').value), ttsVolume: Number(get('ttsVolume').value),
       ttsVoice: get('ttsVoice').value,
+      ttsEngine: get('ttsEngine').value === 'local' ? 'local' : 'system',
+      ttsEndpoint: get('ttsEndpoint').value.trim(),
       whisperIntervalSec: Number(get('whisperIntervalSec').value), maxTokens: Number(get('maxTokens').value)
     };
     get('apiKey').value = '';

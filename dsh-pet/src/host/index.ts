@@ -163,6 +163,7 @@ import {
   type HostNotifyFrame,
 } from './notify-events';
 import { profileNameFrom, storageEntries } from './storage-paths';
+import { LOCAL_TTS_MAX_TEXT, synthesizeLocalTts } from './local-tts';
 import { parseStateWaitQuery, PollStateStore } from './state';
 import { composeSystemPrompt, petPersona } from './persona';
 import {
@@ -1591,6 +1592,55 @@ export function apply(ctx: any): void {
         return { kind: 'json', status: 200, obj: { ok: spoke, ...companion.state() } };
       }
       return { kind: 'json', status: 200, obj: companion.state() };
+    }
+
+    // 本地 TTS（可选语音引擎）：GET /voice/say?text=<文本>&speed=<倍率>
+    //
+    // 为什么是 GET 而不是 POST：这条路由**不改变任何持久状态**（不写配置、不写 S），
+    // 只把一段文本换成音频返回；而 standalone 的请求安全策略里「POST 必须带 token」是条硬规则，
+    // 渲染端（浏览器页 / 桌面窗口）拿不到那个 token。用 GET 既让渲染端能直接调，
+    // 又不破坏「POST ⇒ 需要 token」这条边界——「按参数算出来的字节」本质是读。
+    //
+    // 失败一律 HTTP 200 + {ok:false, reason}（与其它动作端点同一口径）：本地服务没起、
+    // 超时、返回垃圾都是**可预期的业务状态**，客户端据此回退系统语音，不必看传输层错误码。
+    // 文本本身不进日志（只记字数与耗时），避免把桌宠说的话写进日志文件。
+    if (rest === 'voice/say') {
+      if (method !== 'GET') return { kind: 'json', status: 405, obj: { error: 'method not allowed' } };
+      const text = (url.searchParams.get('text') ?? '').slice(0, LOCAL_TTS_MAX_TEXT + 1);
+      const rawSpeed = Number(url.searchParams.get('speed') ?? '');
+      const speed = Number.isFinite(rawSpeed) && rawSpeed >= 0.5 && rawSpeed <= 2 ? rawSpeed : 1;
+      const ttsPolicy = optionalService('standaloneAi') as
+        | {
+            voiceSettings?: () => { enabled?: boolean; engine?: string };
+            ttsLocalEndpoint?: () => string;
+          }
+        | undefined;
+      const voice = ttsPolicy?.voiceSettings?.();
+      // 关着 / 还是系统引擎：直接说「不归我管」，客户端据此走原来的系统语音路径
+      if (voice?.enabled !== true) {
+        return { kind: 'json', status: 200, obj: { ok: false, reason: 'disabled' } };
+      }
+      if (voice.engine !== 'local') {
+        return { kind: 'json', status: 200, obj: { ok: false, reason: 'engine-system' } };
+      }
+      const endpoint = ttsPolicy?.ttsLocalEndpoint?.() ?? '';
+      const result = await synthesizeLocalTts({ endpoint, text, speed });
+      if (!result.ok) {
+        ctx.logger?.info?.(`[dsh-pet] local tts failed: ${result.reason} (${text.length} chars)`);
+        return { kind: 'json', status: 200, obj: { ok: false, reason: result.reason } };
+      }
+      ctx.logger?.info?.(`[dsh-pet] local tts ok: ${result.audio.length}B ${result.ms}ms (${text.length} chars)`);
+      return {
+        kind: 'json',
+        status: 200,
+        obj: {
+          ok: true,
+          audio: `data:${result.contentType};base64,${result.audio.toString('base64')}`,
+          ms: result.ms,
+          bytes: result.audio.length,
+        },
+        headers: { 'cache-control': 'no-store' },
+      };
     }
 
     // 单只宠物的显示位置（桌面端右键「关闭桌面显示」→ POST /pet-display）。

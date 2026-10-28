@@ -55,7 +55,9 @@ test('settings shell is accessible, self contained, and never saves browser secr
   assert.match(settingsScript, /history\.replaceState/);
   assert.match(settingsScript, /X-DSH-Pet-Token/);
   assert.doesNotMatch(settingsScript, /localStorage|sessionStorage|document\.cookie|innerHTML/);
-  assert.doesNotMatch(settingsPage, /https?:\/\/(?!example)/);
+  // 页面必须「自包含」：不许出现任何**外部站点**地址（否则设置页就成了外链跳板）。
+  // 唯一例外是 127.0.0.1——本地 TTS 服务的示例地址天然是本机，不算外部依赖。
+  assert.doesNotMatch(settingsPage, /https?:\/\/(?!(?:example|127\.0\.0\.1))/);
   assert.match(settingsStyle, /focus-visible/);
 });
 
