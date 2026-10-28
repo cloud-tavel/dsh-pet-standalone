@@ -4,8 +4,12 @@ Copyright (c) 2026 PC2005-cloud
 Copyright (c) 2026 dsh-pet-standalone contributors
 
 This project is a derivative work of https://github.com/PC2005-cloud/dsh-pet
-(MIT), based on commit 86bc30c83225919434de8396073078dc22e926fd.
-See NOTICE.md for asset provenance and for the list of third-party assets
+(code MIT), based on commit 86bc30c83225919434de8396073078dc22e926fd.
+
+**The MIT license below covers CODE ONLY.** Character artwork, animation assets,
+preview images, prompts and source videos are licensed under CC BY-NC-SA 4.0
+(Attribution-NonCommercial-ShareAlike) and are **NOT** covered by MIT.
+No commercial use of any kind is permitted. See NOTICE.md, sections 2 and 5.
 that were removed from this distribution.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy

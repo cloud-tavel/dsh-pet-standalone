@@ -8,13 +8,14 @@
 
 <p align="center">
   <b>你打游戏，它在旁边看着，关键时刻自己开口说一句。</b><br>
-  <sub>100 段透明动画 · 拖得动甩得飞 · 能看见你的屏幕 · 只在有话说的时候说话</sub>
+  <sub>106 段透明动画 · 拖得动甩得飞 · 能看见你的屏幕 · 只在有话说的时候说话</sub>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/dsh-pet"><img alt="npm version" src="https://img.shields.io/npm/v/dsh-pet?label=npm&color=blue"></a>
   <a href="https://www.npmjs.com/package/dsh-pet"><img alt="npm monthly downloads" src="https://img.shields.io/npm/dm/dsh-pet?label=%E6%9C%88%E4%B8%8B%E8%BD%BD&color=brightgreen"></a>
-  <a href="https://github.com/PC2005-cloud/dsh-pet"><img alt="license" src="https://img.shields.io/badge/license-MIT%20%2B%20%E7%B4%A0%E6%9D%90%E9%9D%9E%E5%95%86%E7%94%A8-orange"></a>
+  <a href="https://github.com/PC2005-cloud/dsh-pet"><img alt="upstream" src="https://img.shields.io/badge/upstream-PC2005--cloud%2Fdsh--pet-8A2BE2"></a>
+  <img alt="license" src="https://img.shields.io/badge/license-MIT%20AND%20CC--BY--NC--SA--4.0-orange">
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows-0078D4">
   <img alt="assets" src="https://img.shields.io/badge/%E5%8A%A8%E7%94%BB-100%20%E6%AE%B5%20VP9--alpha-ff69b4">
   <img alt="tests" src="https://img.shields.io/badge/tests-1138%20passing-success">
@@ -23,7 +24,7 @@
 > **不是「你点它才动」的桌宠，也不是「你问它才答」的助手。**
 > 它在你旁边待着，自己看你玩，觉得有意思就开口——一局打完可能只说两三句，但每句都在点上。
 
-一只 Windows 桌面宠物：**100 段透明动画**无缝衔接，能拖能甩能砸墙，会在屏幕上自己散步；
+一只 Windows 桌面宠物：**106 段透明动画**无缝衔接，能拖能甩能砸墙，会在屏幕上自己散步；
 **能看见你的游戏画面**（只截前台那一个窗口），画面真变了才开口解说；
 **能念出来**（系统语音，零成本、不联网）。
 
@@ -438,7 +439,7 @@ AI 生成动画的配方     源视频 → 透明动画的管线    运行在 DS
 | [Miru](https://github.com/kiyotakali/Miru)         | 187  | 长期记忆 + 主动陪伴                                           | 不看屏幕、不陪玩；强在记忆与跨设备同步                                                          |
 | [Live2DPet](https://github.com/x380kkm/Live2DPet)  | 90   | Live2D 桌宠 + VOICEVOX 日语音色                               | 不看屏幕；强在 Live2D 模型生态                                                                  |
 | [dsh-game-pet](https://github.com/bigk5780/dsh)    | —    | 同属 DSH 生态，同样「自动截屏 → 出建议」                      | **思路最接近的一个**。10 段动画、无完整桌宠交互（无物理拖拽/漫游/pet pack）、2026-10 之后未更新 |
-| **本项目**                                         | —    | **100 段动画的真桌宠 + 看前台窗口 + 主动陪玩 + 语音**         | —                                                                                               |
+| **本项目**                                         | —    | **106 段动画的真桌宠 + 看前台窗口 + 主动陪玩 + 语音**         | —                                                                                               |
 
 说白了：通用 AI 桌宠已经不缺，缺的是**「它主动看你玩，而且真的有话说」**这一件。这也是第一版只押这一个点的原因。
 
@@ -454,5 +455,15 @@ AI 生成动画的配方     源视频 → 透明动画的管线    运行在 DS
 
 ## 📄 许可
 
-- 代码：MIT
-- 素材（动画/提示词/源视频）：允许开源使用，**禁止商用**
+**代码：MIT** —— 可商用、可再分发。
+上游：[PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（`Copyright (c) 2026 PC2005-cloud`）；本独立版的改作同样以 MIT 发布。
+
+**动画素材与宠物形象：CC BY-NC-SA 4.0**（署名 · **非商业** · 相同方式共享）—— 这一条覆盖整个项目。
+
+- 形象出处：宠物形象是社区二创的 DeepSeek「大肥鱼」（鲸鱼娘），**非 DeepSeek 官方形象**。原型「溟月」出自 B 站 @上善无形；DeepSeek 版（女仆鲸鱼娘）设计出自 B 站 @ZipZipPipe
+- 授权原文：「大肥鱼是遵守 CC BY-NC-SA 4.0 协议的形象，不可以以任何形式商业化。」
+- 因此 **本项目整体不可用于任何商业用途**（含付费分发、打赏、广告、带货）
+- 基于本项目的衍生 / 改版 / 换皮作品，在 GitHub、产品官网等公开渠道发布时**必须附上原作者仓库地址**：<https://github.com/PC2005-cloud/dsh-pet>
+- 提示词与源视频同属上述条款；改过的素材须以同样协议共享
+
+完整判定过程（含三条硬要求与证据链）见仓库根 `LICENSE-AUDIT.md`。
